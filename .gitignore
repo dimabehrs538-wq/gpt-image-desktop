@@ -1,0 +1,18 @@
+# Go
+/core/imagegend
+/core/*.exe
+# 前端 / Tauri
+node_modules/
+app/dist/
+app/src-tauri/target/
+app/src-tauri/gen/schemas/
+app/src-tauri/binaries/imagegend-*
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
+# 机密：更新签名私钥绝不能提交
+*.key
+!*.key.pub

@@ -1,0 +1,76 @@
+name: 构建 Windows 安装包
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call: # 由 release.yml 在推送 v* 标签时调用
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-windows-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache: false  # 内核无第三方依赖
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+
+      - name: Go 单元测试
+        working-directory: core
+        run: go test ./...
+
+      - name: 编译 Go 内核
+        shell: pwsh
+        run: ./scripts/build-core.ps1
+
+      - name: 安装前端依赖
+        working-directory: app
+        run: npm ci
+
+      - name: 构建 Tauri 安装包（NSIS 简体中文 + MSI）
+        working-directory: app
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrEmpty($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            Write-Host "未配置 TAURI_SIGNING_PRIVATE_KEY：跳过更新签名，仅生成 .exe / .msi"
+            npx tauri build --bundles nsis,msi --config src-tauri/tauri.nosign.conf.json
+          } else {
+            npx tauri build --bundles nsis,msi
+          }
+          if ($LASTEXITCODE -ne 0) { throw "tauri build 失败" }
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: GPTImageStudio-windows-x64
+          path: |
+            app/src-tauri/target/release/bundle/nsis/*.exe
+            app/src-tauri/target/release/bundle/msi/*.msi
+            app/src-tauri/target/release/bundle/nsis/*.sig
+            app/src-tauri/target/release/bundle/msi/*.sig
+          if-no-files-found: error

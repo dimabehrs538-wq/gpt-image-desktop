@@ -1,0 +1,102 @@
+name: 发布 Release（Windows + macOS）
+
+# 推送 v* 标签时：并行构建 Windows 与 macOS（Apple Silicon / Intel），
+# 汇总全部安装包与多平台 latest.json，发布到同一个 GitHub Release。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的标签（例如 v0.1.0，需已存在）"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    uses: ./.github/workflows/build-windows.yml
+    secrets: inherit
+
+  macos:
+    uses: ./.github/workflows/build-macos.yml
+    secrets: inherit
+
+  release:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 下载全部构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: GPTImageStudio-*
+
+      - name: 汇总安装包并生成 latest.json
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find artifacts -type f \( -name '*.exe' -o -name '*.msi' -o -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.sig' \) -exec cp {} release/ \;
+          ls -la release
+          python3 - <<'PY'
+          import glob, json, os, subprocess, sys, datetime
+          tag = os.environ["TAG"]; repo = os.environ["REPO"]
+          version = tag.lstrip("v")
+          conf = json.load(open("app/src-tauri/tauri.conf.json", encoding="utf-8"))
+          if conf["version"] != version:
+              sys.exit(f"标签 {tag} 与 tauri.conf.json 版本 {conf['version']} 不一致")
+          base = f"https://github.com/{repo}/releases/download/{tag}"
+          def entry(pattern):
+              files = [f for f in glob.glob(f"release/{pattern}") if not f.endswith(".sig")]
+              if not files or not os.path.exists(files[0] + ".sig"):
+                  return None
+              f = files[0]
+              # GitHub 会把文件名中的空格替换为点，这里产物文件名不含空格
+              return {"signature": open(f + ".sig", encoding="utf-8").read().strip(), "url": f"{base}/{os.path.basename(f)}"}
+          platforms = {}
+          nsis, msi = entry("*-setup.exe"), entry("*.msi")
+          mac_arm, mac_x64 = entry("*_aarch64.app.tar.gz"), entry("*_x64.app.tar.gz")
+          if nsis:
+              platforms["windows-x86_64"] = nsis
+              platforms["windows-x86_64-nsis"] = nsis
+          if msi:
+              platforms["windows-x86_64-msi"] = msi
+          if mac_arm:
+              platforms["darwin-aarch64"] = mac_arm
+              platforms["darwin-aarch64-app"] = mac_arm
+          if mac_x64:
+              platforms["darwin-x86_64"] = mac_x64
+              platforms["darwin-x86_64-app"] = mac_x64
+          if not platforms:
+              print("未找到 .sig 签名文件（未配置 TAURI_SIGNING_PRIVATE_KEY），跳过 latest.json，仅发布安装包")
+              sys.exit(0)
+          try:
+              notes = subprocess.run(["git", "tag", "-l", "--format=%(contents)", tag], capture_output=True, text=True).stdout.strip()
+          except Exception:
+              notes = ""
+          data = {"version": version, "notes": notes or f"GPTImageStudio {version}",
+                  "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "platforms": platforms}
+          json.dump(data, open("release/latest.json", "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+          print(json.dumps(data, ensure_ascii=False, indent=2))
+          PY
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          generate_release_notes: true
+          make_latest: true
+          files: release/*
