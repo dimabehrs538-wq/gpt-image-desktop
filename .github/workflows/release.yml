@@ -56,6 +56,9 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          # actions/checkout 会把附注标签变成轻量标签，这里重新拉取，确保 latest.json 的 notes 是标签说明而不是提交信息
+          git fetch -q --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          test "$(git cat-file -t "$TAG")" = tag || echo "::warning::${TAG} 不是附注标签，latest.json 将使用提交信息作为更新说明"
           mkdir -p release
           find artifacts -type f \( -name '*.exe' -o -name '*.msi' -o -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.sig' -o -name '*.apk' -o -name '*.aab' -o -name '*.ipa' \) -exec cp {} release/ \;
           ls -la release
