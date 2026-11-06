@@ -101,10 +101,53 @@ jobs:
           print(json.dumps(data, ensure_ascii=False, indent=2))
           PY
 
+      - name: 校验四端安装包完整性并生成 SHA256SUMS 与发布说明
+        env:
+          HAS_ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        run: |
+          set -euo pipefail
+          cd release
+          # 机密兜底：发布目录中绝不允许出现私钥 / 密钥库 / 本地配置
+          if ls | grep -Ei '\.(key|jks|keystore|p12|mobileprovision|properties)$'; then echo "发现疑似机密文件，终止发布"; exit 1; fi
+          VERSION="${TAG#v}"
+          python3 ../scripts/verify-release.py . --version "$VERSION"
+          # APK 签名复核（runner 预装 Android build-tools）
+          APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)/apksigner"
+          for f in *.apk; do "$APKSIGNER" verify --verbose "$f" > "$RUNNER_TEMP/apksigner.txt"; head -n 4 "$RUNNER_TEMP/apksigner.txt"; done
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          if [ "$HAS_ANDROID_KEYSTORE" = "true" ]; then AKS="使用仓库配置的正式签名密钥，可覆盖升级"; else AKS="本版本使用 CI 临时生成的签名密钥：后续版本签名不同，升级前需先卸载旧版"; fi
+          if [ -f latest.json ]; then UPD="已附带 \`latest.json\` 与 \`.sig\` 更新签名，桌面端可在「系统设置 → 软件更新」中自动更新。"; else UPD="本次构建 **未配置更新签名私钥**（\`TAURI_SIGNING_PRIVATE_KEY\`），因此 **没有 \`latest.json\` / \`.sig\`，桌面端自动更新暂不可用**，请手动下载新版本覆盖安装。"; fi
+          cat > ../release-notes.md <<EOF2
+          ## GPT 生图工作室 ${TAG}
+
+          调用 OpenAI 兼容 GPT 生图接口（\`/images/generations\`、\`/images/edits\`）的跨平台应用：多分组 baseUrl / apiKey 配置、文生图、多图编辑、本地画廊。
+
+          | 平台 | 文件 | 说明 |
+          | --- | --- | --- |
+          | Windows x64 | \`*_x64-setup.exe\`（推荐）/ \`*_x64_zh-CN.msi\` | 未做 Authenticode 代码签名，SmartScreen 可能提示「未知发布者」，选择「仍要运行」 |
+          | macOS Apple Silicon | \`*_aarch64.dmg\` | ad-hoc 签名、未经 Apple 公证：首次打开请右键 → 打开，或执行 \`xattr -cr /Applications/GPTImageStudio.app\` |
+          | macOS Intel | \`*_x64.dmg\` | 同上 |
+          | Android 7.0+ | \`*_android_universal.apk\` | 通用 APK（arm64-v8a / armeabi-v7a / x86_64），v2/v3 签名，可直接安装；${AKS} |
+          | Android（商店包） | \`*_android_universal.aab\` | 供自行上架使用，本项目未发布到任何应用商店 |
+          | iOS 15+ | \`*_ios.ipa\` | **未签名**，无法直接安装：需用 AltStore / SideStore / Sideloadly 以自己的 Apple ID 重签后安装（免费账号 7 天有效） |
+
+          **自动更新**：${UPD}
+
+          **测试情况**：Go 单元测试、Rust 移动内核单元测试、Go / Rust 双内核协议一致性对比与端到端测试、安装包结构校验均在 CI 中通过；各平台安装包 **尚未在真实设备上完成安装验收**。
+
+          校验和见 \`SHA256SUMS.txt\`。
+          EOF2
+          sed -i 's/^          //' ../release-notes.md
+          cat ../release-notes.md
+
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
+          name: GPTImageStudio ${{ env.TAG }}
+          body_path: release-notes.md
           generate_release_notes: true
           make_latest: true
+          fail_on_unmatched_files: true
           files: release/*

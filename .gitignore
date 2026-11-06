@@ -22,3 +22,5 @@ Thumbs.db
 keystore.properties
 # iOS 工程由 CI / 本地 `tauri ios init` 生成
 app/src-tauri/gen/apple/
+__pycache__/
+*.pyc
