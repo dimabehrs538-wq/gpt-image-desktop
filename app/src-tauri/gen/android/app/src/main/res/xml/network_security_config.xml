@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  网络安全配置：
+  - 仅允许 WebView 以明文 HTTP 访问本机回环地址上的进程内内核（http://127.0.0.1:<随机端口>）；
+  - 其它域名一律要求 HTTPS（外部生图接口由 Rust 内核直接发起请求）。
+-->
+<network-security-config>
+  <base-config cleartextTrafficPermitted="false">
+    <trust-anchors>
+      <certificates src="system" />
+    </trust-anchors>
+  </base-config>
+  <domain-config cleartextTrafficPermitted="true">
+    <domain includeSubdomains="false">127.0.0.1</domain>
+    <domain includeSubdomains="false">localhost</domain>
+  </domain-config>
+</network-security-config>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowUpCircle, Bell, FolderOpen, Info, Laptop, Moon, Power, Save, ShieldCheck, Sun, Timer, FileImage, Settings as SettingsIcon } from "lucide-react";
+import { ArrowUpCircle, Bell, FolderOpen, Info, Laptop, Moon, Power, Save, ShieldCheck, Smartphone, Sun, Timer, FileImage, Settings as SettingsIcon } from "lucide-react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -8,17 +8,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { PageHeader } from "@/components/common";
-import { api, formatUptime, isTauri, openPath, pickDirectory, type Settings as S } from "@/lib/api";
+import { api, formatUptime, isAndroid, isDesktopApp, isMobileApp, openPath, pickDirectory, type Settings as S } from "@/lib/api";
 import { useData } from "@/lib/store";
 import { useUpdater } from "@/lib/updater";
 import { cn } from "@/lib/utils";
 
-function Row({ icon: Icon, title, desc, children }: { icon: typeof Bell; title: string; desc: string; children: React.ReactNode }) {
+function Row({ icon: Icon, title, desc, stack, children }: { icon: typeof Bell; title: string; desc: string; stack?: boolean; children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-4 py-3">
-      <div className="flex size-9 items-center justify-center rounded-lg bg-muted text-muted-foreground"><Icon className="size-4" /></div>
-      <div className="flex-1"><div className="text-sm font-medium">{title}</div><div className="text-xs text-muted-foreground">{desc}</div></div>
-      {children}
+    <div className="flex items-center gap-4 py-3 max-md:flex-wrap max-md:gap-3">
+      <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"><Icon className="size-4" /></div>
+      <div className="min-w-0 flex-1"><div className="text-sm font-medium">{title}</div><div className="text-xs text-muted-foreground">{desc}</div></div>
+      {/* 移动端：带输入框的设置项把控件放到说明文字下方，避免挤压 */}
+      {stack ? <div className="flex shrink-0 items-center gap-2 max-md:ml-12 max-md:w-[calc(100%-3rem)] max-md:[&>div]:w-full max-md:[&_input]:flex-1">{children}</div> : children}
     </div>
   );
 }
@@ -33,7 +34,9 @@ export default function Settings() {
   useEffect(() => { if (settings) { setOut(settings.outputDir); setTimeoutSec(settings.requestTimeoutSec); setPrefix(settings.filenamePrefix); } }, [settings]);
   const [auto, setAuto] = useState(false);
   const [notify, setNotify] = useState(localStorage.getItem("notify") !== "0");
-  useEffect(() => { if (isTauri()) import("@tauri-apps/plugin-autostart").then((m) => m.isEnabled()).then(setAuto).catch(() => {}); }, []);
+  const desktop = isDesktopApp();
+  const mobile = isMobileApp();
+  useEffect(() => { if (isDesktopApp()) import("@tauri-apps/plugin-autostart").then((m) => m.isEnabled()).then(setAuto).catch(() => {}); }, []);
   const themes = [{ v: "light", l: "浅色", i: Sun }, { v: "dark", l: "深色", i: Moon }, { v: "system", l: "跟随系统", i: Laptop }];
   const save = (patch: Partial<S>, msg: string) => run(() => api<S>("PUT", "/api/settings", patch), msg);
 
@@ -42,9 +45,9 @@ export default function Settings() {
       <PageHeader icon={SettingsIcon} title="系统设置" />
       <Card>
         <CardHeader><CardTitle className="text-sm">外观</CardTitle><CardDescription>选择界面主题</CardDescription></CardHeader>
-        <CardContent className="grid grid-cols-3 gap-3">
+        <CardContent className="grid grid-cols-3 gap-3 max-md:gap-2">
           {themes.map((t) => (
-            <button key={t.v} onClick={() => setTheme(t.v)} className={cn("flex flex-col items-center gap-2 rounded-lg border p-4 text-sm transition-colors hover:bg-muted/60", theme === t.v && "border-primary ring-2 ring-primary/20")}>
+            <button key={t.v} onClick={() => setTheme(t.v)} className={cn("flex flex-col items-center gap-2 rounded-lg border p-4 text-sm transition-colors hover:bg-muted/60 max-md:p-3", theme === t.v && "border-primary ring-2 ring-primary/20")}>
               <t.i className="size-5" />{t.l}
             </button>
           ))}
@@ -54,20 +57,27 @@ export default function Settings() {
       <Card className="mt-4">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm"><FolderOpen className="size-4" />图片输出目录</CardTitle>
-          <CardDescription>生成的图片自动保存到这里；同名文件会自动递增序号（-2、-3…），绝不覆盖已有文件。</CardDescription>
+          <CardDescription>
+            生成的图片自动保存到这里；同名文件会自动递增序号（-2、-3…），绝不覆盖已有文件。
+            {mobile && "移动端图片保存在应用沙盒内，可在画廊中「保存到相册」或「分享图片」导出。"}
+          </CardDescription>
         </CardHeader>
-        <CardContent className="flex gap-2">
-          <Input value={out} onChange={(e) => setOut(e.target.value)} className="font-mono text-xs" />
-          {isTauri() && <Button variant="outline" onClick={async () => { const p = await pickDirectory("选择输出目录", out || undefined); if (p) setOut(p); }}><FolderOpen />浏览</Button>}
-          {isTauri() && settings && <Button variant="ghost" onClick={() => openPath(settings.outputDir).catch((e) => toast.error(String(e)))}>打开</Button>}
-          <Button disabled={!out || out === settings?.outputDir} onClick={() => save({ outputDir: out }, "已保存输出目录")}><Save />保存</Button>
-        </CardContent>
+        {mobile ? (
+          <CardContent><div className="rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs break-all text-muted-foreground">{settings?.outputDir ?? "-"}</div></CardContent>
+        ) : (
+          <CardContent className="flex gap-2 max-md:flex-wrap">
+            <Input value={out} onChange={(e) => setOut(e.target.value)} className="font-mono text-xs max-md:w-full" />
+            {desktop && <Button variant="outline" onClick={async () => { const p = await pickDirectory("选择输出目录", out || undefined); if (p) setOut(p); }}><FolderOpen />浏览</Button>}
+            {desktop && settings && <Button variant="ghost" onClick={() => openPath(settings.outputDir).catch((e) => toast.error(String(e)))}>打开</Button>}
+            <Button disabled={!out || out === settings?.outputDir} onClick={() => save({ outputDir: out }, "已保存输出目录")}><Save />保存</Button>
+          </CardContent>
+        )}
       </Card>
 
       <Card className="mt-4">
         <CardHeader><CardTitle className="text-sm">生成</CardTitle></CardHeader>
         <CardContent>
-          <Row icon={Timer} title="请求超时" desc="单次生图请求的最长等待时间（10–3600 秒），高画质大图建议 300 秒以上">
+          <Row stack icon={Timer} title="请求超时" desc="单次生图请求的最长等待时间（10–3600 秒），高画质大图建议 300 秒以上">
             <div className="flex items-center gap-2">
               <Input type="number" min={10} max={3600} value={timeout} onChange={(e) => setTimeoutSec(Number(e.target.value))} className="w-24 text-right" />
               <span className="text-xs text-muted-foreground">秒</span>
@@ -75,7 +85,7 @@ export default function Settings() {
             </div>
           </Row>
           <Separator />
-          <Row icon={FileImage} title="文件名前缀" desc="自动命名时使用的前缀，默认 imagegen（例如 imagegen-20261106-223000.png）">
+          <Row stack icon={FileImage} title="文件名前缀" desc="自动命名时使用的前缀，默认 imagegen（例如 imagegen-20261106-223000.png）">
             <div className="flex items-center gap-2">
               <Input value={prefix} placeholder="imagegen" onChange={(e) => setPrefix(e.target.value)} className="w-36 font-mono text-xs" />
               <Button size="sm" variant="outline" disabled={prefix === (settings?.filenamePrefix ?? "")} onClick={() => save({ filenamePrefix: prefix }, "已保存文件名前缀")}>保存</Button>
@@ -87,20 +97,33 @@ export default function Settings() {
       <Card className="mt-4">
         <CardHeader><CardTitle className="text-sm">通用</CardTitle></CardHeader>
         <CardContent>
-          <Row icon={Power} title="开机自动启动" desc="登录系统后自动在后台运行，只显示托盘图标">
-            <Switch checked={auto} disabled={!isTauri()} onCheckedChange={async (v) => {
-              const m = await import("@tauri-apps/plugin-autostart");
-              try { v ? await m.enable() : await m.disable(); setAuto(v); toast.success(v ? "已开启开机自启" : "已关闭开机自启"); }
-              catch (e) { toast.error("设置失败", { description: String(e) }); }
-            }} />
-          </Row>
-          <Separator />
-          <Row icon={Bell} title="完成通知" desc="生图任务完成或失败时弹出系统通知（窗口隐藏到托盘时也能收到）">
+          {!mobile && (
+            <>
+              <Row icon={Power} title="开机自动启动" desc="登录系统后自动在后台运行，只显示托盘图标">
+                <Switch checked={auto} disabled={!desktop} onCheckedChange={async (v) => {
+                  const m = await import("@tauri-apps/plugin-autostart");
+                  try { v ? await m.enable() : await m.disable(); setAuto(v); toast.success(v ? "已开启开机自启" : "已关闭开机自启"); }
+                  catch (e) { toast.error("设置失败", { description: String(e) }); }
+                }} />
+              </Row>
+              <Separator />
+            </>
+          )}
+          <Row icon={Bell} title="完成通知" desc={mobile ? "生图任务完成或失败时发送系统通知（切到后台时也能收到）" : "生图任务完成或失败时弹出系统通知（窗口隐藏到托盘时也能收到）"}>
             <Switch checked={notify} onCheckedChange={(v) => { setNotify(v); localStorage.setItem("notify", v ? "1" : "0"); }} />
           </Row>
         </CardContent>
       </Card>
 
+      {mobile ? (
+        <Card className="mt-4">
+          <CardHeader><CardTitle className="flex items-center gap-2 text-sm"><Smartphone className="size-4 text-primary" />移动端版本</CardTitle></CardHeader>
+          <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <p>当前版本 {up.version || "-"}。{isAndroid() ? "新版本请在 GitHub Releases 下载已签名的 APK 直接覆盖安装（数据保留）。" : "新版本请在 GitHub Releases 下载 IPA，用 AltStore / SideStore / Sideloadly 等工具重新安装。"}</p>
+            <p>移动端使用进程内 Rust 内核，与桌面端协议完全一致；生成的图片可在画廊中保存到相册或分享。</p>
+          </CardContent>
+        </Card>
+      ) : (
       <Card className="mt-4">
         <CardHeader><CardTitle className="flex items-center gap-2 text-sm"><ArrowUpCircle className="size-4 text-primary" />软件更新</CardTitle></CardHeader>
         <CardContent>
@@ -117,20 +140,21 @@ export default function Settings() {
           </Row>
         </CardContent>
       </Card>
+      )}
 
       <Card className="mt-4">
         <CardHeader><CardTitle className="flex items-center gap-2 text-sm"><ShieldCheck className="size-4 text-emerald-600" />安全与隐私</CardTitle></CardHeader>
         <CardContent className="space-y-2 text-sm text-muted-foreground">
-          <p>本地内核仅监听 127.0.0.1，并使用每次启动随机生成的 40 位 Bearer Token 鉴权；请求直接从本机发往你配置的接口，不经过任何第三方服务器。</p>
+          <p>本地内核{mobile ? "（移动端为 App 进程内的 Rust 内核）" : ""}仅监听 127.0.0.1，并使用每次启动随机生成的 40 位 Bearer Token 鉴权；请求直接从本机发往你配置的接口，不经过任何第三方服务器。</p>
           <p>API Key 保存在本机配置文件（权限 0600），界面、接口响应与日志中只出现脱敏掩码；请求失败时返回的错误信息同样会自动抹去密钥。</p>
         </CardContent>
       </Card>
 
       <Card className="mt-4">
         <CardHeader><CardTitle className="flex items-center gap-2 text-sm"><Info className="size-4" />关于</CardTitle></CardHeader>
-        <CardContent className="grid grid-cols-[120px_1fr] gap-y-2 text-sm">
+        <CardContent className="grid grid-cols-[96px_1fr] gap-y-2 text-sm md:grid-cols-[120px_1fr]">
           <span className="text-muted-foreground">应用版本</span><span>GPT 生图工作室 {up.version || "-"}</span>
-          <span className="text-muted-foreground">内核版本</span><span>imagegend {status?.version ?? "-"}（PID {status?.pid ?? "-"}）</span>
+          <span className="text-muted-foreground">内核版本</span><span>{status?.core === "rust" ? "imagegen 移动内核（Rust）" : "imagegend"} {status?.version ?? "-"}（PID {status?.pid ?? "-"}）</span>
           <span className="text-muted-foreground">内核运行时间</span><span>{status?.uptime !== undefined ? formatUptime(status.uptime) : "-"}</span>
           <span className="text-muted-foreground">数据目录</span><span className="font-mono text-xs break-all">{status?.home ?? "-"}</span>
           <span className="text-muted-foreground">分组配置</span><span className="font-mono text-xs break-all">{status?.configPath ?? "-"}</span>

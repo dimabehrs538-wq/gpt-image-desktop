@@ -1,0 +1,138 @@
+name: 构建 Android 安装包
+
+# 产物：已签名（v2/v3）的通用 APK（arm64 / armv7 / x86_64，可直接在手机上安装）+ AAB（上架 Google Play 用）
+# 签名：优先使用仓库 Secrets 中的正式密钥库；未配置时自动生成临时密钥库（每次构建签名都不同，升级需先卸载旧版）
+#   ANDROID_KEYSTORE_BASE64   base64 编码的 .jks / .keystore 文件
+#   ANDROID_KEYSTORE_PASSWORD 密钥库密码
+#   ANDROID_KEY_ALIAS         密钥别名
+#   ANDROID_KEY_PASSWORD      密钥密码（留空则与密钥库密码相同）
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call: # 由 release.yml 在推送 v* 标签时调用
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-android-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+env:
+  NDK_VERSION: 27.2.12479018
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: 安装 Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 安装 Android NDK
+        run: |
+          set -euo pipefail
+          sdkmanager --install "ndk;${NDK_VERSION}" "platforms;android-36" "build-tools;35.0.0" > /dev/null
+          echo "NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+          key: android
+
+      - name: Rust 移动内核单元测试
+        working-directory: app/src-tauri
+        run: cargo test -p imagegen-mobile-core
+
+      - name: Go / Rust 内核协议一致性对比 + Rust 内核端到端测试
+        run: |
+          set -euo pipefail
+          ./scripts/compare-cores.sh
+          CORE=rust ./scripts/e2e.sh
+
+      - name: 安装前端依赖
+        working-directory: app
+        run: npm ci
+
+      - name: 初始化 Android 工程（仓库已提交 gen/android 时跳过）
+        working-directory: app
+        run: |
+          if [ ! -f src-tauri/gen/android/app/build.gradle.kts ]; then
+            npx tauri android init --ci
+          fi
+
+      - name: 准备发布签名密钥库
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KS="$RUNNER_TEMP/release.jks"
+          if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "使用仓库 Secrets 中的正式签名密钥库"
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KS"
+            STORE_PASS="$ANDROID_KEYSTORE_PASSWORD"; ALIAS="$ANDROID_KEY_ALIAS"; KEY_PASS="${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
+          else
+            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，使用自动生成的临时密钥库签名：APK 可直接安装，但每次构建签名不同，升级前需卸载旧版"
+            STORE_PASS="$(openssl rand -hex 16)"; ALIAS="gptimagestudio"; KEY_PASS="$STORE_PASS"
+            keytool -genkeypair -keystore "$KS" -storetype PKCS12 -alias "$ALIAS" -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$STORE_PASS" -keypass "$KEY_PASS" -dname "CN=GPT Image Studio, O=GPTImageStudio, C=CN" > /dev/null 2>&1
+          fi
+          echo "::add-mask::$STORE_PASS"; echo "::add-mask::$KEY_PASS"
+          {
+            echo "storeFile=$KS"
+            echo "storePassword=$STORE_PASS"
+            echo "keyAlias=$ALIAS"
+            echo "keyPassword=$KEY_PASS"
+          } > app/src-tauri/gen/android/keystore.properties
+
+      - name: 构建 Android 安装包（APK + AAB）
+        working-directory: app
+        run: npx tauri android build --apk --aab --target aarch64 armv7 x86_64 --ci
+
+      - name: 校验签名并整理产物
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./app/src-tauri/tauri.conf.json').version")
+          OUT=app/src-tauri/gen/android/app/build/outputs
+          APK=$(find "$OUT/apk" -name '*-release.apk' | head -n1)
+          AAB=$(find "$OUT/bundle" -name '*-release.aab' | head -n1)
+          test -n "$APK" && test -n "$AAB"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK" | head -n 5
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | grep -E "^package|^native-code|^sdkVersion"
+          mkdir -p dist-android
+          cp "$APK" "dist-android/GPTImageStudio_${VERSION}_android_universal.apk"
+          cp "$AAB" "dist-android/GPTImageStudio_${VERSION}_android_universal.aab"
+          rm -f app/src-tauri/gen/android/keystore.properties "$RUNNER_TEMP/release.jks"
+          ls -la dist-android
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: GPTImageStudio-android
+          path: dist-android/*
+          if-no-files-found: error

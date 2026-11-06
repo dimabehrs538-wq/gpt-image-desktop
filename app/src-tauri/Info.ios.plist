@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  iOS 专用 Info.plist 片段（Tauri 构建时自动合并进 gen/apple 生成的 Info.plist）：
+  - NSAllowsLocalNetworking：允许 WKWebView 以 http 访问 App 进程内的本机内核 127.0.0.1:<随机端口>，其余请求仍强制 HTTPS；
+  - 相册写入 / 读取说明：「保存到相册」「从相册选择参考图」时系统弹窗所需。
+-->
+<plist version="1.0">
+<dict>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>需要将生成的图片保存到你的相册。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>需要从相册选择参考图用于图片编辑。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>需要使用相机拍摄参考图用于图片编辑。</string>
+	<key>CFBundleDisplayName</key>
+	<string>GPT 生图</string>
+	<key>UISupportsDocumentBrowser</key>
+	<false/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+</dict>
+</plist>

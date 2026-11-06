@@ -1,0 +1,117 @@
+name: 构建 iOS 安装包
+
+# 默认产物：未签名的 GPTImageStudio_<版本>_ios.ipa（Payload/GPTImageStudio.app），
+# 可用 AltStore / SideStore / Sideloadly / 爱思助手 等工具以自己的 Apple ID 重签后安装。
+# 可选签名（四个 Secrets 全部配置时额外产出已签名 IPA）：
+#   IOS_CERTIFICATE           base64 编码的 .p12 证书（Apple Development / Distribution）
+#   IOS_CERTIFICATE_PASSWORD  .p12 密码
+#   IOS_MOBILE_PROVISION      base64 编码的 .mobileprovision 描述文件（Bundle ID：com.gptimagestudio.mobile）
+#   APPLE_DEVELOPMENT_TEAM    Team ID
+#   IOS_EXPORT_METHOD         可选：release-testing（默认，Ad Hoc）/ debugging / app-store-connect
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call: # 由 release.yml 在推送 v* 标签时调用
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-ios-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+          key: ios
+
+      - name: 安装 XcodeGen
+        run: command -v xcodegen >/dev/null || brew install xcodegen
+
+      - name: 安装前端依赖
+        working-directory: app
+        run: npm ci
+
+      - name: 初始化 iOS 工程并写入图标
+        working-directory: app
+        run: |
+          set -euo pipefail
+          if [ ! -d src-tauri/gen/apple ]; then
+            npx tauri ios init --ci
+          fi
+          ICONSET=$(find src-tauri/gen/apple -type d -name 'AppIcon.appiconset' | head -n1)
+          if [ -n "$ICONSET" ]; then
+            cp src-tauri/icons/ios/*.png "$ICONSET/"
+            echo "已写入应用图标：$ICONSET"
+          fi
+
+      - name: 构建未签名 IPA
+        working-directory: app
+        run: npx tauri ios build --target aarch64 --no-sign --ci
+
+      - name: 打包 Payload/GPTImageStudio.app → IPA
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./app/src-tauri/tauri.conf.json').version")
+          GEN=app/src-tauri/gen/apple
+          WORK="$RUNNER_TEMP/ipa"; rm -rf "$WORK"; mkdir -p "$WORK/Payload" dist-ios
+          APP=$(find "$GEN/build" -type d -name '*.app' -path '*Products/Applications/*' | head -n1)
+          if [ -z "$APP" ]; then
+            IPA=$(find "$GEN/build" -name '*.ipa' | head -n1)
+            test -n "$IPA" || { echo "未找到 .app 或 .ipa"; find "$GEN/build" -maxdepth 4; exit 1; }
+            unzip -q "$IPA" -d "$WORK/x"
+            APP=$(find "$WORK/x/Payload" -maxdepth 1 -type d -name '*.app' | head -n1)
+          fi
+          echo "使用 $APP"
+          ditto "$APP" "$WORK/Payload/GPTImageStudio.app"
+          PL="$WORK/Payload/GPTImageStudio.app/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' -c 'Print :CFBundleShortVersionString' -c 'Print :MinimumOSVersion' "$PL"
+          # 校验 ATS：允许访问 App 内的 127.0.0.1 内核
+          test "$(/usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity:NSAllowsLocalNetworking' "$PL")" = "true"
+          (cd "$WORK" && zip -qry "$GITHUB_WORKSPACE/dist-ios/GPTImageStudio_${VERSION}_ios.ipa" Payload)
+          ls -la dist-ios
+
+      - name: 可选：使用 Secrets 证书构建已签名 IPA
+        working-directory: app
+        env:
+          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+          IOS_EXPORT_METHOD: ${{ secrets.IOS_EXPORT_METHOD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${IOS_CERTIFICATE:-}" ] || [ -z "${IOS_MOBILE_PROVISION:-}" ] || [ -z "${APPLE_DEVELOPMENT_TEAM:-}" ]; then
+            echo "未配置 iOS 签名 Secrets，仅发布未签名 IPA"
+            exit 0
+          fi
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          rm -rf src-tauri/gen/apple/build
+          npx tauri ios build --target aarch64 --export-method "${IOS_EXPORT_METHOD:-release-testing}" --ci
+          IPA=$(find src-tauri/gen/apple/build -name '*.ipa' | head -n1)
+          cp "$IPA" "$GITHUB_WORKSPACE/dist-ios/GPTImageStudio_${VERSION}_ios_signed.ipa"
+          ls -la "$GITHUB_WORKSPACE/dist-ios"
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: GPTImageStudio-ios
+          path: dist-ios/*
+          if-no-files-found: error

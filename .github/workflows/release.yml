@@ -1,7 +1,7 @@
-name: 发布 Release（Windows + macOS）
+name: 发布 Release（Windows + macOS + Android + iOS）
 
-# 推送 v* 标签时：并行构建 Windows 与 macOS（Apple Silicon / Intel），
-# 汇总全部安装包与多平台 latest.json，发布到同一个 GitHub Release。
+# 推送 v* 标签时：并行构建 Windows、macOS（Apple Silicon / Intel）、Android（APK + AAB）与 iOS（IPA），
+# 汇总全部安装包与桌面端多平台 latest.json，发布到同一个 GitHub Release。
 on:
   push:
     tags: ["v*"]
@@ -27,8 +27,16 @@ jobs:
     uses: ./.github/workflows/build-macos.yml
     secrets: inherit
 
+  android:
+    uses: ./.github/workflows/build-android.yml
+    secrets: inherit
+
+  ios:
+    uses: ./.github/workflows/build-ios.yml
+    secrets: inherit
+
   release:
-    needs: [windows, macos]
+    needs: [windows, macos, android, ios]
     runs-on: ubuntu-latest
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
@@ -49,7 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release
-          find artifacts -type f \( -name '*.exe' -o -name '*.msi' -o -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.sig' \) -exec cp {} release/ \;
+          find artifacts -type f \( -name '*.exe' -o -name '*.msi' -o -name '*.dmg' -o -name '*.app.tar.gz' -o -name '*.sig' -o -name '*.apk' -o -name '*.aab' -o -name '*.ipa' \) -exec cp {} release/ \;
           ls -la release
           python3 - <<'PY'
           import glob, json, os, subprocess, sys, datetime

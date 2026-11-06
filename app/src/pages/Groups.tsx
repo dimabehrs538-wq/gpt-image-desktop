@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Empty, PageHeader } from "@/components/common";
-import { api, isTauri, pickJsonFile, type GroupView, type GroupsResp, type ProbeResult } from "@/lib/api";
+import { api, isDesktopApp, isMobileApp, pickJsonFile, pickTextFile, type GroupView, type GroupsResp, type ProbeResult } from "@/lib/api";
 import { useData } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -101,6 +101,12 @@ export default function Groups() {
   const [json, setJson] = useState("");
   const [path, setPath] = useState("");
   const codex = status?.codexConfigPath ?? "~/.codex/image-api-groups.json";
+  const mobile = isMobileApp();
+  // 移动端没有 ~/.codex 与系统路径：直接选择 JSON 文件读取内容导入
+  const importFromPicker = async () => {
+    const text = await pickTextFile();
+    if (text !== null) await doImport({ json: text });
+  };
 
   const doImport = async (body: { path?: string; json?: string }) => {
     const r = await run(() => api<{ imported: number }>("POST", "/api/groups/import", { ...body, replace }));
@@ -116,7 +122,8 @@ export default function Groups() {
       {groups.length === 0 ? (
         <Empty icon={Server} title="还没有接口分组" desc="新建一个分组，填写 baseUrl 与 apiKey；或从 ~/.codex/image-api-groups.json 一键导入 openai-image-api 技能配置。">
           <Button onClick={() => openGroupDialog(null)}><Plus />新建分组</Button>
-          <Button variant="outline" onClick={() => doImport({})}><Download />从 Codex 配置导入</Button>
+          {mobile ? <Button variant="outline" onClick={importFromPicker}><Download />导入 JSON 文件</Button>
+            : <Button variant="outline" onClick={() => doImport({})}><Download />从 Codex 配置导入</Button>}
         </Empty>
       ) : (
         <div className="grid gap-4 md:grid-cols-2">{groups.map((g) => <GroupCard key={g.name} g={g} />)}</div>
@@ -128,27 +135,30 @@ export default function Groups() {
           <CardDescription>格式与 <code className="font-mono">image-api-groups.json</code> 相同，支持 api_key、api_key_env、api_key_ref 三种密钥方式。导出文件以 0600 权限写入。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-            <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder={codex} className="font-mono text-xs" />
-            {isTauri() && <Button variant="outline" onClick={async () => { const p = await pickJsonFile("选择配置文件"); if (p) setPath(p); }}>浏览…</Button>}
-          </div>
+          {!mobile && (
+            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+              <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder={codex} className="font-mono text-xs" />
+              {isDesktopApp() && <Button variant="outline" onClick={async () => { const p = await pickJsonFile("选择配置文件"); if (p) setPath(p); }}>浏览…</Button>}
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
             <label className="flex items-center gap-2"><Switch checked={replace} onCheckedChange={setReplace} />导入时替换现有全部分组</label>
             <label className="flex items-center gap-2"><Switch checked={includeKeys} onCheckedChange={setIncludeKeys} />导出时包含明文 api_key</label>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={() => doImport({ path: path || undefined })}><Download />从文件导入</Button>
+            {mobile ? <Button variant="secondary" onClick={importFromPicker}><Download />选择 JSON 文件导入</Button>
+              : <Button variant="secondary" onClick={() => doImport({ path: path || undefined })}><Download />从文件导入</Button>}
             <Button variant="outline" onClick={() => setPaste(true)}><FileJson />粘贴 JSON 导入</Button>
-            <Button variant="secondary" onClick={() => run(async () => {
+            {!mobile && <Button variant="secondary" onClick={() => run(async () => {
               const r = await api<{ path: string; groups: number }>("POST", "/api/groups/export", { path: path || undefined, includeKeys });
               return r;
-            }).then((r) => r && toast.success(`已导出 ${r.groups} 个分组`, { description: r.path }))}><Upload />导出到文件</Button>
+            }).then((r) => r && toast.success(`已导出 ${r.groups} 个分组`, { description: r.path }))}><Upload />导出到文件</Button>}
             <Button variant="outline" onClick={() => run(async () => {
               const r = await api("GET", `/api/groups/export${includeKeys ? "?includeKeys=1" : ""}`);
               await navigator.clipboard.writeText(JSON.stringify(r, null, 2));
             }, "已复制配置 JSON")}><Copy />复制 JSON</Button>
           </div>
-          <p className="text-xs text-muted-foreground">路径留空时默认使用 <code className="font-mono">{codex}</code>。{includeKeys && <span className="text-amber-600 dark:text-amber-400"> 注意：导出内容将包含明文密钥，请妥善保管。</span>}</p>
+          <p className="text-xs text-muted-foreground">{mobile ? "移动端可选择 JSON 文件或粘贴内容导入；导出请使用「复制 JSON」后粘贴保存。" : <>路径留空时默认使用 <code className="font-mono">{codex}</code>。</>}{includeKeys && <span className="text-amber-600 dark:text-amber-400"> 注意：导出内容将包含明文密钥，请妥善保管。</span>}</p>
           {status?.configPath && <p className="text-xs text-muted-foreground">本机配置文件：<code className="font-mono">{status.configPath}</code></p>}
         </CardContent>
       </Card>

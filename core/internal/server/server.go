@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -94,6 +96,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/settings", s.putSettings)
 	mux.HandleFunc("POST /api/generate", s.submit("generate"))
 	mux.HandleFunc("POST /api/edit", s.submit("edit"))
+	mux.HandleFunc("POST /api/uploads", s.upload)
 	mux.HandleFunc("GET /api/jobs", s.listJobs)
 	mux.HandleFunc("GET /api/jobs/{id}", s.getJob)
 	mux.HandleFunc("POST /api/jobs/{id}/cancel", s.cancelJob)
@@ -216,7 +219,7 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		"version": Version, "pid": os.Getpid(), "uptime": int64(time.Since(s.start).Seconds()),
 		"home": s.Engine.Home, "configPath": s.Engine.Groups.Path(), "outputDir": st.OutputDir,
 		"groups": len(groups), "defaultGroup": def, "activeJobs": active, "historyCount": total,
-		"codexConfigPath": config.CodexConfigPath(),
+		"codexConfigPath": config.CodexConfigPath(), "platform": runtime.GOOS, "core": "go",
 	})
 }
 
@@ -430,6 +433,26 @@ func (s *Server) submit(mode string) http.HandlerFunc {
 		job := s.StartJob(p)
 		writeJSON(w, 202, job)
 	}
+}
+
+// upload 直接接收图片文件流（请求体即原始字节，?name= 为原文件名），保存为临时附件并返回本地路径。
+// 浏览器 / Android WebView / iOS WKWebView 的 <input type="file"> 拿不到系统绝对路径，可先上传再以 {"path": ...} 引用。
+func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<20))
+	if err != nil {
+		writeErr(w, 400, "读取上传内容失败："+err.Error())
+		return
+	}
+	if len(data) == 0 {
+		writeErr(w, 400, "上传内容为空")
+		return
+	}
+	name, path, err := s.Engine.SaveUpload(r.URL.Query().Get("name"), data)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"path": path, "name": name, "size": len(data)})
 }
 
 func (s *Server) snapshot(j *Job) Job {

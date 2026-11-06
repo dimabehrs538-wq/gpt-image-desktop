@@ -1,0 +1,29 @@
+[package]
+name = "imagegen-mobile-core"
+version = "0.1.0"
+edition = "2021"
+description = "GPT 生图工作室移动端（Android / iOS）进程内内核：与 Go imagegend 100% 兼容的 /api/* REST + SSE 协议"
+publish = false
+
+[lib]
+name = "imagegen_mobile_core"
+path = "src/lib.rs"
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros", "fs"] }
+tokio-util = "0.7"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+regex = "1"
+rand = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+sha1_smol = "1"
+url = "2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+
+[dev-dependencies]
+tempfile = "3"

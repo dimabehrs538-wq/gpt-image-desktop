@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
-import { isMac, isTauri } from "./api";
+import { isDesktopApp, isMac, isMobileApp, isTauri } from "./api";
 import type { Update } from "@tauri-apps/plugin-updater";
 
 const CHECK_INTERVAL = 4 * 60 * 60 * 1000; // 每 4 小时
@@ -33,7 +33,8 @@ export function UpdaterProvider({ children }: { children: ReactNode }) {
   useEffect(() => { if (isTauri()) import("@tauri-apps/api/app").then((m) => m.getVersion()).then(setVersion); }, []);
 
   const check = useCallback(async (manual: boolean) => {
-    if (!isTauri()) { if (manual) toast.info("浏览器调试模式不支持更新"); return; }
+    // 移动端通过 GitHub Releases 下载新版 APK / IPA 覆盖安装，不使用桌面自动更新
+    if (!isDesktopApp()) { if (manual) toast.info(isMobileApp() ? "移动端请前往 GitHub Releases 下载新版安装包" : "浏览器调试模式不支持更新"); return; }
     setChecking(true);
     try {
       const { check } = await import("@tauri-apps/plugin-updater");
@@ -47,7 +48,7 @@ export function UpdaterProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!autoCheck) return;
+    if (!autoCheck || !isDesktopApp()) return;
     const t = setTimeout(() => check(false), FIRST_CHECK_DELAY);
     const iv = setInterval(() => check(false), CHECK_INTERVAL);
     return () => { clearTimeout(t); clearInterval(iv); };

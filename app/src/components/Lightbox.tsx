@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FolderOpen, ImagePlus, RotateCcw, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, Copy, Download, ExternalLink, FolderOpen, ImagePlus, RotateCcw, Share2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Switch } from "@/components/ui/switch";
 import { Tip } from "@/components/ui/tooltip";
-import { api, baseName, fileURL, formatBytes, formatMs, formatTime, isTauri, openPath, revealFile, thumbURL, type HistoryItem } from "@/lib/api";
+import { api, baseName, canShareImages, fileURL, formatBytes, formatMs, formatTime, isDesktopApp, isIOS, isMobileApp, openPath, revealFile, saveImage, shareImage, thumbURL, type HistoryItem } from "@/lib/api";
 import { useData } from "@/lib/store";
 
 function Meta({ k, v, mono }: { k: string; v?: React.ReactNode; mono?: boolean }) {
@@ -36,17 +36,35 @@ export function Lightbox({ items, index, onIndex, onClose }: { items: HistoryIte
     return () => window.removeEventListener("keydown", h);
   }, [index, items.length, onIndex]);
 
+  const touch = useRef<{ x: number; y: number } | null>(null);
   if (!it) return null;
   const g = groups.find((x) => x.name === it.group);
   const params = { group: it.group, model: it.model, prompt: it.prompt, size: it.size ?? "", quality: it.quality ?? "", background: it.background ?? "", outputFormat: it.outputFormat ?? "", n: it.n || 1 };
   const safe = async (fn: () => Promise<unknown>) => { try { await fn(); } catch (e) { toast.error(String((e as Error).message ?? e)); } };
+  const mobile = isMobileApp();
+  const doSave = () => safe(async () => {
+    const r = await saveImage(it.path);
+    if (r === "saved") toast.success("已保存到系统相册", { description: "相册 › Pictures/GPTImageStudio" });
+    else if (r === "downloaded") toast.success("已开始下载原图");
+  });
+  const doShare = () => safe(async () => { const r = await shareImage(it.path); if (r === "downloaded") toast.success("当前环境不支持分享，已改为下载原图"); });
+  // 移动端左右滑动切换
+  const onTouchStart = (e: React.TouchEvent) => { touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; };
+  const onTouchEnd = (e: React.TouchEvent) => {
+    const t = touch.current; touch.current = null;
+    if (!t) return;
+    const dx = e.changedTouches[0].clientX - t.x, dy = e.changedTouches[0].clientY - t.y;
+    if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    if (dx < 0 && index! < items.length - 1) onIndex(index! + 1);
+    if (dx > 0 && index! > 0) onIndex(index! - 1);
+  };
 
   return (
     <>
       <Dialog open={index !== null} onOpenChange={(v) => !v && onClose()}>
-        <DialogContent className="h-[min(92vh,900px)] gap-0 overflow-hidden p-0 sm:max-w-[min(1280px,95vw)]">
-          <div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-[1fr_340px]">
-            <div className="checker relative flex min-h-0 items-center justify-center overflow-hidden">
+        <DialogContent className="h-[min(92vh,900px)] gap-0 overflow-hidden p-0 sm:max-w-[min(1280px,95vw)] max-md:h-dvh max-md:max-h-dvh max-md:max-w-full max-md:rounded-none max-md:border-0 max-md:pt-safe max-md:[&>button]:top-[calc(env(safe-area-inset-top)+0.75rem)] max-md:[&>button]:z-10 max-md:[&>button]:rounded-full max-md:[&>button]:bg-black/50 max-md:[&>button]:p-2 max-md:[&>button]:text-white">
+          <div className="grid h-full min-h-0 grid-cols-1 grid-rows-[minmax(0,48%)_minmax(0,1fr)] md:grid-cols-[1fr_340px] md:grid-rows-1">
+            <div className="checker relative flex min-h-0 touch-pan-y items-center justify-center overflow-hidden" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
               {it.fileSize < 0 ? <div className="text-sm text-muted-foreground">图片文件已被移动或删除</div> : (
                 <img key={it.id} src={fileURL(it.path)} alt={it.prompt} className="max-h-full max-w-full object-contain animate-in fade-in-0" />
               )}
@@ -54,7 +72,7 @@ export function Lightbox({ items, index, onIndex, onClose }: { items: HistoryIte
               {index! < items.length - 1 && <Button size="icon" variant="secondary" className="absolute right-3 rounded-full opacity-80 hover:opacity-100" onClick={() => onIndex(index! + 1)}><ChevronRight /></Button>}
               <div className="absolute bottom-3 left-3 rounded-md bg-black/55 px-2 py-0.5 text-xs text-white">{index! + 1} / {items.length}</div>
             </div>
-            <div className="flex min-h-0 flex-col border-l bg-background">
+            <div className="flex min-h-0 flex-col bg-background max-md:border-t md:border-l">
               <div className="space-y-2 border-b p-4 pr-10">
                 <DialogTitle className="truncate text-sm" title={baseName(it.path)}>{baseName(it.path)}</DialogTitle>
                 <DialogDescription className="flex flex-wrap gap-1.5">
@@ -107,18 +125,24 @@ export function Lightbox({ items, index, onIndex, onClose }: { items: HistoryIte
                   </div>
                 )}
               </div>
-              <div className="grid grid-cols-2 gap-2 border-t p-3">
+              <div className="grid grid-cols-2 gap-2 border-t p-3 max-md:pb-[calc(env(safe-area-inset-bottom)+0.75rem)] max-md:[&_button]:h-10">
                 <Button size="sm" onClick={() => { onClose(); go(it.mode === "edit" ? "edit" : "create", { params, images: it.mode === "edit" ? it.inputImages?.map((p) => ({ path: p })) : undefined, mask: it.mask ? { path: it.mask } : null }); }}><RotateCcw />复用参数再来一张</Button>
                 <Button size="sm" variant="secondary" onClick={() => { onClose(); go("edit", { params: { ...params, prompt: "" }, images: [{ path: it.path }] }); }}><ImagePlus />作为参考图编辑</Button>
-                {isTauri() ? (
+                {isDesktopApp() ? (
                   <>
                     <Button size="sm" variant="outline" onClick={() => safe(() => revealFile(it.path))}><FolderOpen />打开所在目录</Button>
                     <Button size="sm" variant="outline" onClick={() => safe(() => openPath(it.path))}><ExternalLink />系统看图打开</Button>
                   </>
+                ) : mobile ? (
+                  <>
+                    <Button size="sm" variant="outline" disabled={it.fileSize < 0} onClick={doSave}><Download />{isIOS() ? "存储到相册" : "保存到相册"}</Button>
+                    <Button size="sm" variant="outline" disabled={it.fileSize < 0} onClick={doShare}><Share2 />分享图片</Button>
+                  </>
                 ) : (
                   <>
                     <Button size="sm" variant="outline" asChild><a href={fileURL(it.path, true)}><Download />下载原图</a></Button>
-                    <Button size="sm" variant="outline" onClick={() => openPath(it.path)}><ExternalLink />新标签打开</Button>
+                    {canShareImages() ? <Button size="sm" variant="outline" onClick={doShare}><Share2 />分享图片</Button>
+                      : <Button size="sm" variant="outline" onClick={() => openPath(it.path)}><ExternalLink />新标签打开</Button>}
                   </>
                 )}
                 <Tip content="删除这条记录，可选择同时删除本地图片文件">

@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop",
+  "description": "桌面端专属权限：托盘、开机自启、自动更新、进程重启",
+  "platforms": [
+    "linux",
+    "macOS",
+    "windows"
+  ],
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:tray:default",
+    "autostart:default",
+    "updater:default",
+    "process:default"
+  ]
+}

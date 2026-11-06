@@ -8,7 +8,7 @@ import { Segmented } from "@/components/ui/tabs";
 import { Empty, PageHeader } from "@/components/common";
 import { ImageCard } from "@/components/ImageCard";
 import { Lightbox } from "@/components/Lightbox";
-import { api, isTauri, openPath, type HistoryItem } from "@/lib/api";
+import { api, isDesktopApp, openPath, type HistoryItem } from "@/lib/api";
 import { useData } from "@/lib/store";
 
 const PAGE = 60;
@@ -47,16 +47,16 @@ export default function Gallery() {
   return (
     <>
       <PageHeader icon={Images} title="作品画廊" desc={`共 ${total} 张作品 · 本地历史记录`}>
-        {settings && <Button variant="outline" size="sm" onClick={() => openPath(settings.outputDir).catch((e) => toast.error(String(e)))} disabled={!isTauri()}><FolderOpen />输出目录</Button>}
+        {settings && isDesktopApp() && <Button variant="outline" size="sm" onClick={() => openPath(settings.outputDir).catch((e) => toast.error(String(e)))}><FolderOpen />输出目录</Button>}
       </PageHeader>
-      <div className="mb-5 flex flex-wrap items-center gap-3">
-        <div className="relative min-w-60 flex-1">
+      <div className="mb-5 flex flex-wrap items-center gap-3 max-md:mb-4 max-md:gap-2">
+        <div className="relative min-w-60 flex-1 max-md:w-full max-md:min-w-0 max-md:flex-none">
           <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索提示词、模型、文件名…" className="pl-9" />
         </div>
         <Segmented value={mode} onChange={setMode} options={[{ value: "", label: "全部" }, { value: "generate", label: "文生图" }, { value: "edit", label: "图生图" }]} />
         <Select value={group || ALL} onValueChange={(v) => setGroup(v === ALL ? "" : v)}>
-          <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-44 max-md:flex-1"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>全部接口分组</SelectItem>
             {allGroups.map((g) => <SelectItem key={g} value={g}>{label(g)}</SelectItem>)}
@@ -69,7 +69,7 @@ export default function Gallery() {
           {!(dq || mode || group) && <Button onClick={() => go("create")}>开始创作</Button>}
         </Empty>
       ) : (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-4">
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-[repeat(auto-fill,minmax(180px,1fr))] sm:gap-4">
           {items.map((it, i) => <ImageCard key={it.id} item={it} onClick={() => setOpen(i)} />)}
         </div>
       )}

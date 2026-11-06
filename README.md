@@ -1,8 +1,9 @@
 # GPT 生图工作室（GPTImageStudio）
 
-一个专门调用 **OpenAI 兼容 GPT 生图接口** 的跨平台桌面端：用户自行配置 `baseUrl` 与 `apiKey`（支持多分组），即可文生图（`/images/generations`）、图生图 / 多图编辑（`/images/edits`），作品自动保存到本地并在画廊中统一管理。
+一个专门调用 **OpenAI 兼容 GPT 生图接口** 的跨平台应用（**Windows / macOS / Android / iOS**）：用户自行配置 `baseUrl` 与 `apiKey`（支持多分组），即可文生图（`/images/generations`）、图生图 / 多图编辑（`/images/edits`），作品自动保存到本地并在画廊中统一管理。
 
 - 桌面端做法与打包方式参考 [lan-sync](https://github.com/dimabehrs538-wq/lan-sync)：**Go 本地 sidecar 内核 + Tauri v2 + React 19 + Tailwind CSS v4 + shadcn/ui 风格组件**，GitHub Actions 自动打包 **Windows（NSIS 简体中文 / MSI）** 与 **macOS（Apple Silicon / Intel DMG）** 并联合发布、支持自动更新。
+- **移动端（Android / iOS）**：同一套 Tauri v2 + React 界面，窄屏自动切换为顶部标题栏 + 底部五栏导航；内核换成 **App 进程内的 Rust 内核**（`app/src-tauri/mobile-core`），与 Go 内核的 `/api/*` REST + SSE 协议 **100% 一致**（`scripts/compare-cores.sh` 逐项比对）。CI 自动产出 **可直接安装的已签名 APK（v2/v3）+ AAB** 与 **未签名 IPA**（AltStore / Sideloadly 自签安装）。
 - 接口调用规范对齐 `openai-image-api` 技能：分组配置、`append_v1` 规范化、`api_key` / `api_key_env` / `api_key_ref` 三种密钥方式、严格不回退、密钥绝不外泄、防覆盖落盘。
 
 | 创作工作台 | 图生图（深色） |
@@ -10,6 +11,10 @@
 | ![](docs/screenshots/create.png) | ![](docs/screenshots/edit-dark.png) |
 | **接口分组配置** | **作品灯箱** |
 | ![](docs/screenshots/group-dialog.png) | ![](docs/screenshots/lightbox.png) |
+
+| 移动端 · 创作 | 移动端 · 编辑（深色） | 移动端 · 画廊 | 移动端 · 设置（深色） |
+| --- | --- | --- | --- |
+| ![](docs/screenshots/mobile-create.png) | ![](docs/screenshots/mobile-edit-dark.png) | ![](docs/screenshots/mobile-gallery.png) | ![](docs/screenshots/mobile-settings-dark.png) |
 
 ---
 
@@ -50,6 +55,14 @@
 - **macOS 适配**：LaunchAgent 开机自启、菜单栏 **模板图标**（自动适配浅色 / 深色菜单栏）、关闭窗口后点击 **Dock 图标重新唤起主窗口**（`RunEvent::Reopen`）、标准 `.icns`（16–1024 全尺寸含 @2x）、ad-hoc 签名。
 - 浏览器独立调试模式：`http://localhost:5173/?port=<端口>&token=<令牌>`。
 
+### 移动端体验（Android / iOS）
+- **响应式布局**：≥ 768px（`md`）保持侧边栏布局；窄屏为紧凑顶部栏 + 底部固定五栏导航（创作 / 编辑 / 画廊 / 接口 / 设置），适配刘海屏与手势条（`viewport-fit=cover` + `env(safe-area-inset-*)`；Android 另由原生层按系统栏 / 刘海 / 软键盘让位）。
+- **参考图**：`<input type="file" accept="image/*" multiple>` 调起系统相册 / 相机 / 文件，图片以文件流上传到内核（`POST /api/uploads`），失败时回退 Base64。
+- **保存与分享**：灯箱内「保存到相册」「分享图片」——Android 通过原生桥写入 `Pictures/GPTImageStudio`（MediaStore，免存储权限）并调起系统分享；iOS 通过系统分享面板（可「存储图像」到相册）。
+- 移动端自动隐藏不适用的桌面功能：开机自启、桌面自动更新、打开资源管理器 / Finder 目录、选择输出目录。
+- **进程内 Rust 内核**：监听 `127.0.0.1:0`（随机端口）+ 随机令牌，`core_info` 命令返回 `{port, token}`；数据存于 App 沙盒（`app_data_dir`）。支持分组、文生图、多图编辑（路径 / 上传文件流 / Base64）、`b64_json` 与 `url` 结果、防覆盖落盘、画廊、缩略图、SSE。
+- 网络权限：Android `INTERNET` + `network_security_config` 仅对 `127.0.0.1` / `localhost` 放行明文；iOS `NSAppTransportSecurity → NSAllowsLocalNetworking = true`。
+
 ---
 
 ## 目录结构
@@ -73,8 +86,15 @@ gpt-image-desktop/
 │   │   ├── components/           # ParamsPanel、RefImages、JobFeed、Lightbox、GroupDialog、ui/*
 │   │   └── lib/                  # api.ts（内核通信）、store.tsx（SSE 数据中心）、updater.tsx（Win+Mac 更新）
 │   ├── icon-src/make_icons.py    # Pillow 生成图标源文件 + 托盘图标
-│   └── src-tauri/                # Rust 壳：sidecar 管理、托盘、单实例、自启、通知、对话框、opener、updater
-│       ├── icons/                # 32/64/128/128@2x/icon.png/ico/icns/tray/tray-template/Square*Logo
+│   └── src-tauri/                # Rust 壳：桌面端（cfg(desktop)）sidecar、托盘、单实例、自启、updater；移动端（cfg(mobile)）进程内内核
+│       ├── src/lib.rs · desktop.rs  # 公共命令 core_info 等 / 桌面专属逻辑
+│       ├── mobile-core/          # Rust 移动内核 imagegen-mobile-core（axum + reqwest，协议与 Go 内核一致，可在桌面单测 / e2e）
+│       ├── gen/android/          # Android 工程（原生桥 ImageBridge、窗口让位、network_security_config、发布签名配置）
+│       ├── Info.ios.plist        # iOS 专用 Info.plist 片段（ATS 本地网络、相册权限说明），构建时自动合并
+│       ├── tauri.{windows,macos,linux}.conf.json  # 仅桌面：externalBin sidecar + 更新产物
+│       ├── tauri.{android,ios}.conf.json          # 仅移动端：Bundle ID com.gptimagestudio.mobile
+│       ├── capabilities/         # default.json（全平台）/ desktop.json（托盘、自启、更新，仅桌面）
+│       ├── icons/                # 桌面图标 + ios/ AppIcon 全套（Android mipmap 位于 gen/android）
 │       ├── binaries/             # imagegend-<target-triple>[.exe]（由 build-core 生成，不入库）
 │       ├── tauri.conf.json
 │       └── tauri.nosign.conf.json  # 未配置签名私钥时关闭 updater 产物
@@ -82,11 +102,14 @@ gpt-image-desktop/
 │   ├── build-core.sh             # Linux / macOS / Windows（amd64/arm64）交叉编译 sidecar，支持 macOS --universal
 │   ├── build-core.ps1            # Windows PowerShell 编译（-H windowsgui 隐藏控制台）
 │   ├── mock-openai.py            # 本地 Mock OpenAI 兼容接口（标准库）
-│   └── e2e.sh                    # 端到端联调脚本
+│   ├── e2e.sh                    # 端到端联调脚本（CORE=go|rust）
+│   └── compare-cores.sh          # Go / Rust 双内核协议一致性对比
 └── .github/workflows/
     ├── build-windows.yml         # push main / 手动 / 被 release 调用：Windows NSIS + MSI
     ├── build-macos.yml           # push main / 手动 / 被 release 调用：macOS aarch64 + x64 DMG
-    └── release.yml               # 推送 v* 标签：并行构建双平台 → 汇总 latest.json → 同一个 GitHub Release
+    ├── build-android.yml         # push main / 手动 / 被 release 调用：已签名 APK（arm64/armv7/x86_64）+ AAB
+    ├── build-ios.yml             # push main / 手动 / 被 release 调用：未签名 IPA（可选 Secrets 签名）
+    └── release.yml               # 推送 v* 标签：并行构建四个平台 → 汇总 latest.json → 同一个 GitHub Release
 ```
 
 数据目录（内核 `--home`，默认系统配置目录下的 `GPTImageDesktop`，可用 `IMAGEGEN_HOME` 覆盖）：
@@ -111,6 +134,8 @@ gpt-image-desktop/
 | Node.js | ≥ 20（推荐 22） |
 | Rust | stable（Tauri v2） |
 | 系统依赖 | Windows：WebView2 + VS C++ 生成工具；macOS：Xcode Command Line Tools；Linux：`libwebkit2gtk-4.1-dev` 等 |
+| Android | JDK 17 + Android SDK（platform 36 / build-tools 35）+ NDK 27 |
+| iOS | macOS + Xcode 15+ + XcodeGen（`brew install xcodegen`） |
 
 ```bash
 # 1. 编译当前平台的 sidecar
@@ -157,6 +182,7 @@ imagegend status                                 # 查看运行中的内核
 | POST | `/api/groups/preview` | baseUrl 规范化预览 |
 | POST / GET | `/api/groups/import` · `/api/groups/export` | 导入（path / json，merge / replace）· 导出 |
 | GET / PUT | `/api/settings` | 系统设置 |
+| POST | `/api/uploads?name=` | 上传参考图文件流（原始请求体，≤ 64 MB，仅图片），返回 `{name, path}` 供编辑引用 |
 | POST | `/api/generate` · `/api/edit` | 提交异步任务（参考图支持 `path` 或 `dataUrl`） |
 | GET | `/api/jobs` · `/api/jobs/{id}` · POST `/api/jobs/{id}/cancel` | 任务 |
 | GET / DELETE | `/api/history` · `/api/history/{id}?deleteFile=1` | 画廊查询 / 删除 |
@@ -169,6 +195,9 @@ imagegend status                                 # 查看运行中的内核
 ```bash
 cd core && go test -v ./...      # 单元测试 + httptest 端到端
 ./scripts/e2e.sh                 # 真实启动 imagegend serve + Mock OpenAI 的完整闭环
+CORE=rust ./scripts/e2e.sh       # 同一套闭环跑 Rust 移动内核
+./scripts/compare-cores.sh       # Go / Rust 双内核逐项比对响应字段结构与状态码
+cd app/src-tauri && cargo test -p imagegen-mobile-core   # Rust 移动内核单元测试
 cd app && npm run build          # tsc 类型检查 + Vite 打包
 ```
 
@@ -216,6 +245,50 @@ npx tauri build --target universal-apple-darwin --bundles app,dmg
 >
 > 如需正式分发，可在 `tauri.conf.json` 的 `bundle.macOS.signingIdentity` 配置 Developer ID 证书，并在 CI 中配置 Apple 公证相关环境变量。
 
+### Android（APK / AAB）
+
+环境：JDK 17、Android SDK（platform 36、build-tools 35）、NDK 27（设置 `ANDROID_HOME` / `NDK_HOME`）、`rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android`。
+
+```bash
+cd app && npm ci
+# 发布签名（可选）：创建 src-tauri/gen/android/keystore.properties（已被 .gitignore 忽略）
+#   storeFile=/绝对路径/release.jks
+#   storePassword=…  keyAlias=…  keyPassword=…
+npx tauri android build --apk --aab --target aarch64 armv7 x86_64
+npx tauri android dev            # 连接手机 / 模拟器实时调试
+```
+
+产物：`src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk` 与 `bundle/universalRelease/*.aab`。
+
+**安装**：在 Actions 的 `GPTImageStudio-android` Artifact 或 Release 中下载 `GPTImageStudio_<版本>_android_universal.apk`，传到手机直接点击安装（首次需允许「安装未知来源应用」）。APK 使用 v2/v3 签名，支持 Android 7.0（API 24）及以上。
+
+> 未在仓库 Secrets 中配置正式密钥库时，CI 会 **自动生成临时密钥库** 签名：可以直接安装，但每次构建的签名不同，**覆盖升级前需先卸载旧版**（数据会被清除）。想要稳定签名，请生成密钥库：
+> `keytool -genkeypair -keystore release.jks -storetype PKCS12 -alias gptimagestudio -keyalg RSA -keysize 2048 -validity 10000`
+> 然后在 **Settings → Secrets and variables → Actions** 新增：`ANDROID_KEYSTORE_BASE64`（`base64 -w0 release.jks` 的输出）、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`（可选）。
+
+### iOS（IPA）
+
+**方式一：下载 CI 产出的未签名 IPA 自签安装（无需 Mac）**
+
+1. 在 Actions 的 `GPTImageStudio-ios` Artifact 或 Release 中下载 `GPTImageStudio_<版本>_ios.ipa`（内含 `Payload/GPTImageStudio.app`，arm64，iOS 15+）。
+2. 用 [AltStore](https://altstore.io/) / SideStore 或 [Sideloadly](https://sideloadly.io/) 以自己的 Apple ID 重签并安装：AltStore 在「My Apps」点 `+` 选择 IPA；Sideloadly 把 IPA 拖进窗口、填写 Apple ID 后点 Start。
+3. 首次打开前：**设置 → 通用 → VPN 与设备管理** 信任你的开发者证书；iOS 16+ 还需打开 **设置 → 隐私与安全性 → 开发者模式**。免费 Apple ID 签名有效期 7 天，AltStore 可自动续签。
+
+**方式二：本地 Xcode 构建**
+
+```bash
+xcode-select --install && brew install xcodegen      # 一次性
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+cd app && npm ci
+npx tauri ios init                                   # 生成 src-tauri/gen/apple（不入库）
+cp src-tauri/icons/ios/*.png src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/
+npx tauri ios dev                                    # 模拟器 / 真机调试
+npx tauri ios open                                   # 在 Xcode 中选择自己的 Team 后直接 Run 到手机
+npx tauri ios build --target aarch64 --no-sign       # 仅打包未签名归档
+```
+
+**可选：CI 自动签名**——在 Secrets 中配置 `IOS_CERTIFICATE`（base64 的 .p12）、`IOS_CERTIFICATE_PASSWORD`、`IOS_MOBILE_PROVISION`（base64 的描述文件，Bundle ID `com.gptimagestudio.mobile`）、`APPLE_DEVELOPMENT_TEAM`，可选 `IOS_EXPORT_METHOD`（默认 `release-testing`），工作流会额外产出 `GPTImageStudio_<版本>_ios_signed.ipa`。
+
 ### 交叉编译 sidecar（任意平台验证）
 
 ```bash
@@ -230,15 +303,18 @@ npx tauri build --target universal-apple-darwin --bundles app,dmg
 | --- | --- | --- |
 | `build-windows.yml` | push `main`、手动、被 release 调用 | `GPTImageStudio-windows-x64`（`.exe` + `.msi` [+ `.sig`]） |
 | `build-macos.yml` | push `main`、手动、被 release 调用；矩阵 `aarch64-apple-darwin` / `x86_64-apple-darwin` | `GPTImageStudio-macos-aarch64`、`GPTImageStudio-macos-x64`（`.dmg` [+ `.app.tar.gz` + `.sig`]） |
-| `release.yml` | 推送 `v*` 标签（或手动指定标签） | 并行调用上面两个工作流 → 汇总全部安装包 + 多平台 `latest.json` → 发布到 **同一个 GitHub Release** |
+| `build-android.yml` | push `main`、手动、被 release 调用（ubuntu-latest） | `GPTImageStudio-android`（已签名通用 `.apk` + `.aab`） |
+| `build-ios.yml` | push `main`、手动、被 release 调用（macos-latest） | `GPTImageStudio-ios`（未签名 `.ipa` [+ 已签名 `_signed.ipa`]） |
+| `release.yml` | 推送 `v*` 标签（或手动指定标签） | 并行调用上面四个工作流 → 汇总全部安装包（exe / msi / dmg / apk / aab / ipa）+ 桌面端多平台 `latest.json` → 发布到 **同一个 GitHub Release** |
 
-每个构建都会先跑 `go test ./...`，再编译 sidecar → `npm ci` → `npx tauri build`。
+桌面构建会先跑 `go test ./...`，再编译 sidecar → `npm ci` → `npx tauri build`；Android 构建会先跑 Rust 移动内核单测、Go / Rust 双内核协议一致性对比与 Rust 内核 e2e。
 
 **下载安装包**：打开仓库 **Actions** → 选择最近一次「构建 macOS 安装包」/「构建 Windows 安装包」运行 → 页面底部 **Artifacts** 下载 `GPTImageStudio-macos-aarch64`（M 系列芯片）/ `GPTImageStudio-macos-x64`（Intel）/ `GPTImageStudio-windows-x64`，解压后即可得到 `.dmg` / `.exe` / `.msi`。打过 `v*` 标签后，也可直接在 **Releases** 页面下载。
 
 ### 签名私钥（可选，用于自动更新）
 
 - **未配置** `TAURI_SIGNING_PRIVATE_KEY`：工作流自动使用 `tauri.nosign.conf.json`，照常产出 `.exe` / `.msi` / `.dmg` 并上传 Artifacts；打标签时照常创建 Release，只是不生成 `latest.json`（客户端不会收到自动更新）。
+- 移动端不使用该私钥（APK / IPA 通过重新安装升级，数据保留需签名一致）。
 - **已配置**：额外生成 `.sig` 与 macOS `.app.tar.gz`，`release.yml` 自动生成包含 `windows-x86_64`（`-nsis` / `-msi`）、`darwin-aarch64`、`darwin-x86_64` 的 `latest.json`。
 
 配置步骤：

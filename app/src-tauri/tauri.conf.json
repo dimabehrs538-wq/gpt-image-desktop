@@ -40,9 +40,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": [
-      "binaries/imagegend"
-    ],
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico",
@@ -74,7 +71,12 @@
       },
       "signingIdentity": "-"
     },
-    "createUpdaterArtifacts": true
+    "android": {
+      "minSdkVersion": 24
+    },
+    "iOS": {
+      "minimumSystemVersion": "15.0"
+    }
   },
   "plugins": {
     "updater": {

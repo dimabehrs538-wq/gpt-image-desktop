@@ -63,33 +63,36 @@ export function Composer({ mode }: { mode: "generate" | "edit" }) {
   };
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[320px_1fr]">
-      <div className="space-y-4 lg:sticky lg:top-0 lg:self-start">
-        {mode === "edit" && <RefImages images={images} onChange={setImages} mask={mask} onMask={setMask} />}
-        <ParamsPanel value={params} onChange={setParams} />
+    // 移动端单列流式排布：提示词 → 参考图 → 参数 → 任务结果（通过 display: contents + order 重排）
+    <div className="grid gap-4 md:gap-5 lg:grid-cols-[320px_1fr]">
+      <div className="space-y-4 max-lg:contents lg:sticky lg:top-0 lg:self-start">
+        {mode === "edit" && <div className="max-lg:order-2"><RefImages images={images} onChange={setImages} mask={mask} onMask={setMask} /></div>}
+        <div className="max-lg:order-3"><ParamsPanel value={params} onChange={setParams} /></div>
       </div>
-      <div className="min-w-0 space-y-5">
-        <Card className="gap-0 overflow-hidden p-0 focus-within:border-primary/50 focus-within:ring-[3px] focus-within:ring-primary/10">
+      <div className="min-w-0 space-y-5 max-lg:contents">
+        <Card className="gap-0 overflow-hidden p-0 focus-within:border-primary/50 focus-within:ring-[3px] focus-within:ring-primary/10 max-lg:order-1">
           <Textarea ref={ta} value={params.prompt} rows={5}
             placeholder={mode === "edit" ? "描述要如何修改参考图。多张参考图时，请说明每张图的作用，例如：「以图 1 为底图，把图 2 的logo 放到杯子上，其余保持不变」" : "描述你想要的画面：主体、场景、风格、光线、构图、色调……"}
-            className="min-h-32 resize-none rounded-none border-0 p-4 text-[15px] leading-relaxed shadow-none focus-visible:ring-0 dark:bg-transparent"
+            className="min-h-32 resize-none rounded-none border-0 p-4 text-[15px] leading-relaxed shadow-none focus-visible:ring-0 max-md:min-h-28 dark:bg-transparent"
             onChange={(e) => setParams({ ...params, prompt: e.target.value })}
             onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); } }} />
           <div className="flex flex-wrap items-center gap-2 border-t bg-muted/30 px-3 py-2">
-            <Lightbulb className="size-3.5 text-amber-500" />
-            {ideas.map((s, i) => (
-              <button key={i} className="max-w-52 truncate rounded-full border bg-background px-2.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground" title={s}
-                onClick={() => setParams({ ...params, prompt: s })}>{s}</button>
-            ))}
-            <div className="ml-auto flex items-center gap-3">
-              <span className="text-[11px] text-muted-foreground tabular-nums">{params.prompt.length} 字 · {isMac() ? "⌘" : "Ctrl"}+Enter 生成</span>
-              <Button variant="brand" disabled={!canSubmit || submitting} onClick={submit}>
+            <div className="scrollbar-none flex min-w-0 items-center gap-2 max-md:-mx-1 max-md:w-full max-md:overflow-x-auto max-md:px-1 md:flex-wrap">
+              <Lightbulb className="size-3.5 shrink-0 text-amber-500" />
+              {ideas.map((s, i) => (
+                <button key={i} className="max-w-52 shrink-0 truncate rounded-full border bg-background px-2.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground max-md:py-1.5" title={s}
+                  onClick={() => setParams({ ...params, prompt: s })}>{s}</button>
+              ))}
+            </div>
+            <div className="ml-auto flex items-center gap-3 max-md:w-full">
+              <span className="text-[11px] text-muted-foreground tabular-nums">{params.prompt.length} 字<span className="max-md:hidden"> · {isMac() ? "⌘" : "Ctrl"}+Enter 生成</span></span>
+              <Button variant="brand" className="max-md:ml-auto max-md:h-11 max-md:flex-1 max-md:text-[15px]" disabled={!canSubmit || submitting} onClick={submit}>
                 {submitting ? <Loader2 className="animate-spin" /> : <Wand2 />}{mode === "edit" ? "开始编辑" : "立即生成"}{params.n > 1 ? ` ×${params.n}` : ""}
               </Button>
             </div>
           </div>
         </Card>
-        <JobFeed mode={mode} />
+        <div className="max-lg:order-4"><JobFeed mode={mode} /></div>
       </div>
     </div>
   );

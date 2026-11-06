@@ -152,14 +152,21 @@ func (e *Engine) loadInput(in ImageInput) (imageapi.InputImage, string, error) {
 	if err != nil {
 		return imageapi.InputImage{}, "", errors.New("图片数据解码失败")
 	}
-	if !strings.HasPrefix(http_detect(data), "image/") {
-		return imageapi.InputImage{}, "", errors.New("上传的文件不是图片")
+	name, path, err := e.SaveUpload(in.Name, data)
+	if err != nil {
+		return imageapi.InputImage{}, "", err
 	}
-	name := in.Name
+	return imageapi.InputImage{Name: name, Data: data}, path, nil
+}
+
+// SaveUpload 校验并保存上传的参考图副本到 home/inputs/YYYY-MM（便于“复用参数”与历史追溯），返回 (文件名, 路径)。
+func (e *Engine) SaveUpload(name string, data []byte) (string, string, error) {
+	if !strings.HasPrefix(http_detect(data), "image/") {
+		return "", "", errors.New("上传的文件不是图片")
+	}
 	if name == "" {
 		name = "input" + imageapi.ExtFor(data, "")
 	}
-	// 保存一份副本，便于“复用参数”与历史追溯
 	ext := filepath.Ext(name)
 	if ext == "" {
 		ext = imageapi.ExtFor(data, "")
@@ -171,9 +178,9 @@ func (e *Engine) loadInput(in ImageInput) (imageapi.InputImage, string, error) {
 	dir := filepath.Join(e.Home, "inputs", time.Now().Format("2006-01"))
 	path, err := imageapi.SaveNoOverwrite(dir, base, strings.ToLower(ext), data)
 	if err != nil {
-		return imageapi.InputImage{}, "", fmt.Errorf("保存参考图副本失败：%v", err)
+		return "", "", fmt.Errorf("保存参考图副本失败：%v", err)
 	}
-	return imageapi.InputImage{Name: name, Data: data}, path, nil
+	return name, path, nil
 }
 
 // Run 执行请求：调用接口 → 防覆盖落盘 → 写入历史。

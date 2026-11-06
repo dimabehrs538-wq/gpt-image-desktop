@@ -4,12 +4,13 @@ import { cn } from "@/lib/utils";
 
 export function PageHeader({ title, desc, icon: Icon, children }: { title: string; desc?: string; icon?: LucideIcon; children?: ReactNode }) {
   return (
-    <div className="mb-5 flex items-end gap-4">
-      <div className="flex flex-1 items-center gap-3">
-        {Icon && <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary"><Icon className="size-5" /></div>}
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
-          {desc && <p className="mt-0.5 text-sm text-muted-foreground">{desc}</p>}
+    <div className="mb-5 flex flex-wrap items-end gap-x-4 gap-y-2 max-md:mb-3">
+      <div className="flex min-w-0 flex-1 items-center gap-3">
+        {Icon && <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary max-md:hidden"><Icon className="size-5" /></div>}
+        <div className="min-w-0">
+          {/* 移动端标题已显示在顶部标题栏，这里只保留说明文字 */}
+          <h1 className="text-xl font-semibold tracking-tight max-md:hidden">{title}</h1>
+          {desc && <p className="mt-0.5 text-sm text-muted-foreground max-md:mt-0 max-md:text-xs">{desc}</p>}
         </div>
       </div>
       {children && <div className="flex items-center gap-2">{children}</div>}

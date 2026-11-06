@@ -16,3 +16,9 @@ Thumbs.db
 # 机密：更新签名私钥绝不能提交
 *.key
 !*.key.pub
+# 机密：Android 发布签名密钥库与口令绝不能提交
+*.jks
+*.keystore
+keystore.properties
+# iOS 工程由 CI / 本地 `tauri ios init` 生成
+app/src-tauri/gen/apple/

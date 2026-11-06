@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
-export interface CoreInfo { port: number; token: string }
+export interface CoreInfo { port: number; token: string; platform?: string }
 
 export interface KeyRef { path: string; field: string }
 export interface GroupView {
@@ -18,6 +18,7 @@ export interface Settings { outputDir: string; requestTimeoutSec: number; filena
 export interface Status {
   version: string; pid: number; uptime: number; home: string; configPath: string; outputDir: string;
   groups: number; defaultGroup: string; activeJobs: number; historyCount: number; codexConfigPath: string;
+  platform?: string; core?: "go" | "rust";
 }
 export interface HistoryItem {
   id: string; jobId: string; createdAt: number; mode: "generate" | "edit"; group: string; baseUrl: string; model: string;
@@ -196,3 +197,100 @@ export async function pickJsonFile(title: string): Promise<string | null> {
 
 export const isMac = () => /Mac|iPhone|iPad/i.test(navigator.userAgent);
 export { isTauri };
+
+/* ───────────── 平台判断：桌面 App / 移动 App（Android、iOS）/ 浏览器 ───────────── */
+
+const ua = () => navigator.userAgent;
+/** iPadOS 13+ 的 UA 伪装成 Macintosh，需要结合触控点判断 */
+const iPadOS = () => /Macintosh/.test(ua()) && navigator.maxTouchPoints > 1;
+export const isIOS = () => core?.platform === "ios" || /iPhone|iPad|iPod/i.test(ua()) || iPadOS();
+export const isAndroid = () => core?.platform === "android" || /Android/i.test(ua());
+/** 运行在 Tauri 移动端（Android / iOS） */
+export const isMobileApp = () => isTauri() && (isIOS() || isAndroid());
+/** 运行在 Tauri 桌面端（Windows / macOS / Linux），可使用系统对话框、托盘、开机自启、自动更新等 */
+export const isDesktopApp = () => isTauri() && !isMobileApp();
+
+/**
+ * 直接上传图片文件流到内核（POST /api/uploads，请求体即原始字节），返回可在编辑请求中引用的本地路径。
+ * 移动端 WebView 与浏览器的 <input type="file"> 拿不到系统绝对路径，因此统一先上传为内核附件。
+ */
+export async function uploadImage(f: File): Promise<ImageInput> {
+  const c = await getCore();
+  let r: Response;
+  try {
+    r = await fetch(`http://127.0.0.1:${c.port}/api/uploads?name=${encodeURIComponent(f.name || "image.png")}`, {
+      method: "POST", headers: { Authorization: `Bearer ${c.token}`, "Content-Type": "application/octet-stream" }, body: f,
+    });
+  } catch {
+    throw new Error("无法连接内核服务，请稍后重试");
+  }
+  const data = (await r.json().catch(() => ({}))) as { path?: string; name?: string; error?: string };
+  if (!r.ok || !data.path) throw new ApiError(data.error || `上传失败（HTTP ${r.status}）`, r.status, data);
+  return { path: data.path, name: f.name || data.name };
+}
+
+interface AndroidBridge { saveImage(path: string, name: string): string; shareImage(path: string, name: string): string }
+const androidBridge = () => (window as unknown as { GPTImageAndroid?: AndroidBridge }).GPTImageAndroid;
+
+async function fileBlob(path: string) {
+  const r = await fetch(fileURL(path));
+  if (!r.ok) throw new Error("读取图片失败");
+  const b = await r.blob();
+  return new File([b], baseName(path), { type: b.type || "image/png" });
+}
+
+function downloadFile(f: File) {
+  const url = URL.createObjectURL(f);
+  const a = Object.assign(document.createElement("a"), { href: url, download: f.name });
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+/** 当前环境能否调起系统分享面板 */
+export const canShareImages = () => !!androidBridge() || (typeof navigator.share === "function" && isMobileApp());
+
+/**
+ * 分享图片：Android 通过原生桥调起系统分享（FileProvider），iOS / 其它支持 Web Share API 的环境用 navigator.share({ files })，
+ * 都不支持时回退为下载。
+ */
+export async function shareImage(path: string) {
+  const br = androidBridge();
+  if (br) {
+    const r = br.shareImage(path, baseName(path));
+    if (!r.startsWith("ok")) throw new Error(r.replace(/^error:/, "") || "分享失败");
+    return "shared";
+  }
+  const f = await fileBlob(path);
+  if (navigator.canShare?.({ files: [f] })) {
+    try { await navigator.share({ files: [f], title: f.name }); return "shared"; }
+    catch (e) { if ((e as Error).name === "AbortError") return "canceled"; throw e; }
+  }
+  downloadFile(f);
+  return "downloaded";
+}
+
+/**
+ * 保存图片到手机相册 / 本地：Android 直接写入系统相册（Pictures/GPTImageStudio），
+ * iOS 调起分享面板（选择「存储图像」即可存入照片），桌面浏览器直接下载原图。
+ */
+export async function saveImage(path: string): Promise<"saved" | "shared" | "downloaded" | "canceled"> {
+  const br = androidBridge();
+  if (br) {
+    const r = br.saveImage(path, baseName(path));
+    if (r.startsWith("ok")) return "saved";
+    if (r !== "unsupported") throw new Error(r.replace(/^error:/, "") || "保存失败");
+    return (await shareImage(path)) as "shared";
+  }
+  if (isIOS()) return (await shareImage(path)) as "shared" | "downloaded" | "canceled";
+  downloadFile(await fileBlob(path));
+  return "downloaded";
+}
+
+/** 读取用户选择的文本文件（移动端导入 JSON 配置） */
+export function pickTextFile(accept = ".json,application/json,text/plain"): Promise<string | null> {
+  return new Promise((resolve) => {
+    const input = Object.assign(document.createElement("input"), { type: "file", accept });
+    input.onchange = async () => resolve(input.files?.[0] ? await input.files[0].text() : null);
+    input.click();
+  });
+}
