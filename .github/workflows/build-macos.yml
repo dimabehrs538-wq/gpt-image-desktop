@@ -79,13 +79,14 @@ jobs:
         run: |
           set -euo pipefail
           B=app/src-tauri/target/${{ matrix.target }}/release/bundle
+          VERSION=$(node -p "require('./app/src-tauri/tauri.conf.json').version")
           mkdir -p dist-mac
           cp "$B"/dmg/*.dmg dist-mac/
           if ls "$B"/macos/*.app.tar.gz >/dev/null 2>&1; then
             for f in "$B"/macos/*.app.tar.gz; do
               n=$(basename "$f" .app.tar.gz)
-              cp "$f" "dist-mac/${n}_${{ matrix.label }}.app.tar.gz"
-              [ -f "$f.sig" ] && cp "$f.sig" "dist-mac/${n}_${{ matrix.label }}.app.tar.gz.sig"
+              cp "$f" "dist-mac/${n}_${VERSION}_${{ matrix.label }}.app.tar.gz"
+              [ -f "$f.sig" ] && cp "$f.sig" "dist-mac/${n}_${VERSION}_${{ matrix.label }}.app.tar.gz.sig"
             done
           fi
           ls -la dist-mac
