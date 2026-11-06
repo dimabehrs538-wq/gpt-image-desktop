@@ -3,6 +3,8 @@
     <!-- 访问外部 OpenAI 兼容生图接口 + WebView 访问本机回环地址上的进程内内核 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 应用内更新：下载新版 APK 后交给系统安装器（每次都需用户在系统界面确认，且需用户允许“安装未知应用”） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- 生图完成通知（Android 13+） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 

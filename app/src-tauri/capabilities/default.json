@@ -17,6 +17,14 @@
           "path": "**"
         }
       ]
+    },
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "https://github.com/dimabehrs538-wq/gpt-image-desktop/*"
+        }
+      ]
     }
   ]
 }

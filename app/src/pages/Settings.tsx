@@ -8,7 +8,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { PageHeader } from "@/components/common";
-import { api, formatUptime, isAndroid, isDesktopApp, isMobileApp, openPath, pickDirectory, type Settings as S } from "@/lib/api";
+import { api, formatUptime, isDesktopApp, isMobileApp, openExternal, openPath, pickDirectory, type Settings as S } from "@/lib/api";
+import { RELEASES_PAGE } from "@/lib/release";
 import { useData } from "@/lib/store";
 import { useUpdater } from "@/lib/updater";
 import { cn } from "@/lib/utils";
@@ -115,32 +116,29 @@ export default function Settings() {
         </CardContent>
       </Card>
 
-      {mobile ? (
-        <Card className="mt-4">
-          <CardHeader><CardTitle className="flex items-center gap-2 text-sm"><Smartphone className="size-4 text-primary" />移动端版本</CardTitle></CardHeader>
-          <CardContent className="space-y-2 text-sm text-muted-foreground">
-            <p>当前版本 {up.version || "-"}。{isAndroid() ? "新版本请在 GitHub Releases 下载已签名的 APK 直接覆盖安装（数据保留）。" : "新版本请在 GitHub Releases 下载 IPA，用 AltStore / SideStore / Sideloadly 等工具重新安装。"}</p>
-            <p>移动端使用进程内 Rust 内核，与桌面端协议完全一致；生成的图片可在画廊中保存到相册或分享。</p>
-          </CardContent>
-        </Card>
-      ) : (
       <Card className="mt-4">
-        <CardHeader><CardTitle className="flex items-center gap-2 text-sm"><ArrowUpCircle className="size-4 text-primary" />软件更新</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="flex items-center gap-2 text-sm">{mobile ? <Smartphone className="size-4 text-primary" /> : <ArrowUpCircle className="size-4 text-primary" />}软件更新</CardTitle></CardHeader>
         <CardContent>
-          <div className="flex items-center gap-4 py-2">
-            <div className="flex-1">
+          <div className="flex items-center gap-4 py-2 max-md:flex-wrap">
+            <div className="min-w-0 flex-1">
               <div className="text-sm font-medium">当前版本 {up.version || "-"}</div>
-              <div className="text-xs text-muted-foreground">从 GitHub Releases 获取更新（Windows / macOS），安装包经过签名校验</div>
+              <div className="text-xs text-muted-foreground">
+                {up.channel === "desktop" && "从 GitHub Releases 获取更新（Windows / macOS），安装包经过签名校验后自动安装并重启"}
+                {up.channel === "android" && "检查 GitHub 最新正式版；下载 APK 后由系统安装器安装，需要你在系统界面确认"}
+                {up.channel === "ios" && "检查 GitHub 最新正式版；IPA 需用 AltStore / SideStore / Sideloadly 重新签名安装，无法应用内直接更新"}
+                {up.channel === "web" && "浏览器调试模式不支持更新"}
+              </div>
+              {up.lastResult && <div className={cn("mt-1 text-xs", up.lastResult.ok ? "text-muted-foreground" : "text-destructive")}>上次检查：{up.lastResult.text}（{new Date(up.lastResult.at).toLocaleTimeString()}）</div>}
             </div>
-            <Button variant="outline" disabled={up.checking} onClick={up.checkNow}><ArrowUpCircle className={up.checking ? "animate-spin" : ""} />{up.checking ? "检查中…" : "检查更新"}</Button>
+            <Button variant="outline" disabled={up.checking || up.channel === "web"} onClick={up.checkNow} className="max-md:w-full"><ArrowUpCircle className={up.checking ? "animate-spin" : ""} />{up.checking ? "检查中…" : "检查更新"}</Button>
           </div>
           <Separator />
-          <Row icon={ArrowUpCircle} title="自动检查更新" desc="启动时及每隔 4 小时检查一次，有新版本时提示">
+          <Row icon={ArrowUpCircle} title="自动检查更新" desc="启动后及每隔 4 小时检查一次，有新版本时提示">
             <Switch checked={up.autoCheck} onCheckedChange={up.setAutoCheck} />
           </Row>
+          {mobile && <p className="pt-2 text-xs text-muted-foreground">所有版本：<button className="text-primary underline-offset-2 hover:underline" onClick={() => openExternal(RELEASES_PAGE).catch((e) => toast.error(String(e)))}>GitHub Releases</button></p>}
         </CardContent>
       </Card>
-      )}
 
       <Card className="mt-4">
         <CardHeader><CardTitle className="flex items-center gap-2 text-sm"><ShieldCheck className="size-4 text-emerald-600" />安全与隐私</CardTitle></CardHeader>

@@ -311,18 +311,33 @@ npx tauri ios build --target aarch64 --no-sign       # 仅打包未签名归档
 
 **下载安装包**：打开仓库 **Actions** → 选择最近一次「构建 macOS 安装包」/「构建 Windows 安装包」运行 → 页面底部 **Artifacts** 下载 `GPTImageStudio-macos-aarch64`（M 系列芯片）/ `GPTImageStudio-macos-x64`（Intel）/ `GPTImageStudio-windows-x64`，解压后即可得到 `.dmg` / `.exe` / `.msi`。打过 `v*` 标签后，也可直接在 **Releases** 页面下载。
 
-### 签名私钥（可选，用于自动更新）
+### 自动更新
 
-- **未配置** `TAURI_SIGNING_PRIVATE_KEY`：工作流自动使用 `tauri.nosign.conf.json`，照常产出 `.exe` / `.msi` / `.dmg` 并上传 Artifacts；打标签时照常创建 Release，只是不生成 `latest.json`（客户端不会收到自动更新）。
-- 移动端不使用该私钥（APK / IPA 通过重新安装升级，数据保留需签名一致）。
-- **已配置**：额外生成 `.sig` 与 macOS `.app.tar.gz`，`release.yml` 自动生成包含 `windows-x86_64`（`-nsis` / `-msi`）、`darwin-aarch64`、`darwin-x86_64` 的 `latest.json`。
+| 平台 | 方式 | 现状 |
+| --- | --- | --- |
+| Windows | Tauri updater 读取 Release 的 `latest.json` → 下载 NSIS 安装包 → minisign 签名校验 → 停止内核 → passive 安装后自动重启 | 本仓库已配置 `TAURI_SIGNING_PRIVATE_KEY`（与 `tauri.conf.json` 公钥 `AE09F86A862A1887` 配对），自 v0.1.1 起发布 `latest.json` + `.sig` |
+| macOS | 同上，下载 `.app.tar.gz` 原地替换 `.app` 后重启 | 同上（Apple Silicon / Intel 各一个更新包） |
+| Android | 查询 GitHub 最新正式版 → 展示更新说明 → 系统 DownloadManager 下载 APK → 校验包名 / 版本 / 签名证书 → 打开 **系统安装器由用户确认** | 自 v0.1.1 起使用项目固定签名；**不会静默安装**，首次需允许本应用「安装未知应用」 |
+| iOS | 查询 GitHub 最新正式版 → 展示更新说明与下载页 | IPA 未签名，需用 AltStore / SideStore / Sideloadly 重新签名安装，**无法应用内更新** |
 
-配置步骤：
+- 启动 15 秒后及每 4 小时自动检查（可在「系统设置 → 软件更新」关闭），也可手动检查；**检查失败时显示失败原因，不会误报“已是最新版本”**。
+- 版本比较、GitHub Release 解析、资产挑选、平台判断、错误提示的单元测试：`cd app && npm test`。
+- 校验更新签名：`python3 scripts/verify-updater-sig.py --latest-json latest.json --dir <下载目录>`（只用公钥，需 `cryptography`）。
+- 未配置 `TAURI_SIGNING_PRIVATE_KEY` 时工作流自动改用 `tauri.nosign.conf.json`，照常产出安装包，只是不生成 `latest.json`（客户端收不到自动更新）。
 
-1. 生成密钥对：`cd app && npx tauri signer generate -w ~/.tauri/gpt-image-studio-updater.key`
-2. 把 `.key.pub` 的内容填入 `app/src-tauri/tauri.conf.json` → `plugins.updater.pubkey`（仓库中已填入一把预生成的公钥，如使用自己的密钥请替换）。
-3. 仓库 **Settings → Secrets and variables → Actions** 新增：`TAURI_SIGNING_PRIVATE_KEY`（私钥文件内容）与 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`（无密码可留空）。
-4. 把 `plugins.updater.endpoints` 改成你的仓库：`https://github.com/<owner>/<repo>/releases/latest/download/latest.json`。
+> **v0.1.0 的升级限制**：
+> - v0.1.0 桌面端已内置相同公钥与更新地址，v0.1.1 发布后可检测到更新。
+> - v0.1.0 Android 版由 CI 临时密钥签名，该密钥构建后即销毁、**无法恢复**，因此从 v0.1.0 升级到 v0.1.1 **需要一次性卸载重装**（应用内数据会被清除，请先在画廊把作品「保存到相册」，并在「接口配置」导出分组）。v0.1.1 起使用固定签名，之后可覆盖升级。
+> - v0.1.0 移动端没有内置检查更新功能，需要手动下载 v0.1.1。
+
+签名密钥与口令只保存在维护者本机私有目录与仓库 Actions Secrets 中，绝不进入 git 或 Release（`release.yml` 发布前会拦截 `.key` / `.jks` / `.keystore` / `.p12` / `.properties` 等文件）。
+
+配置自己的密钥（fork 时）：
+
+1. 生成密钥对：`cd app && npx tauri signer generate -w ~/.tauri/gpt-image-studio-updater.key`，把 `.key.pub` 内容填入 `tauri.conf.json → plugins.updater.pubkey`（**更换公钥后，旧版本将无法验证新签名，只能手动升级一次**）。
+2. `gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/gpt-image-studio-updater.key`（有口令时另设 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）。
+3. Android：`keytool -genkeypair -keystore release.jks -storetype PKCS12 -alias gptimagestudio -keyalg RSA -keysize 4096 -validity 36500`，然后 `base64 -w0 release.jks | gh secret set ANDROID_KEYSTORE_BASE64`，并设置 `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD`。**请妥善备份密钥库，丢失后已安装用户将无法覆盖升级。**
+4. 把 `plugins.updater.endpoints` 与 `app/src/lib/release.ts` 中的仓库地址改成你的仓库。
 
 ### 发布新版本
 

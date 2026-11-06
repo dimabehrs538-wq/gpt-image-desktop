@@ -1,24 +1,35 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { Download, RefreshCw, Sparkles } from "lucide-react";
+import { Download, ExternalLink, RefreshCw, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
-import { isDesktopApp, isMac, isMobileApp, isTauri } from "./api";
+import { androidBridge, isAndroid, isDesktopApp, isIOS, isMac, isTauri, openExternal } from "./api";
+import { checkLatestRelease, formatSize, manualCheckMessage, updatePlatform, type ReleaseAsset, type ReleaseInfo } from "./release";
 import type { Update } from "@tauri-apps/plugin-updater";
 
 const CHECK_INTERVAL = 4 * 60 * 60 * 1000; // 每 4 小时
 const FIRST_CHECK_DELAY = 15 * 1000;
 
-interface Ctx { version: string; checking: boolean; autoCheck: boolean; setAutoCheck: (v: boolean) => void; checkNow: () => Promise<void> }
+interface Ctx {
+  version: string; checking: boolean; autoCheck: boolean; setAutoCheck: (v: boolean) => void; checkNow: () => Promise<void>;
+  /** 最近一次检查的结果文字（成功 / 失败都记录，供设置页展示） */
+  lastResult: { ok: boolean; text: string; at: number } | null;
+  /** 当前平台的更新方式说明 */
+  channel: "desktop" | "android" | "ios" | "web";
+}
 const UpdaterCtx = createContext<Ctx>(null!);
 export const useUpdater = () => useContext(UpdaterCtx);
 
+interface MobileUpdate { release: ReleaseInfo; asset: ReleaseAsset | null }
+
 /**
  * 软件更新：
- * - Windows：下载 NSIS 安装包 → 停止内核 → install() 以 passive 模式启动安装程序并退出本程序（安装完成后自动启动）。
- * - macOS：下载 .app.tar.gz → 停止内核 → install() 原地替换 .app → relaunch() 重启。
+ * - Windows：Tauri updater 读取 Release 中的 latest.json（minisign 签名校验）→ 下载 NSIS 安装包 → 停止内核 → passive 模式安装后自动重启。
+ * - macOS：Tauri updater 下载 .app.tar.gz（签名校验）→ 停止内核 → 原地替换 .app → relaunch() 重启。
+ * - Android：查询 GitHub 最新正式版 → 展示更新说明 → 下载 APK（校验包名 / 版本 / 签名证书）→ 交给系统安装器由用户确认。
+ * - iOS：查询 GitHub 最新正式版 → 展示更新说明与下载页；IPA 需用户自行用 AltStore / Sideloadly 等重新签名安装。
  */
 export function UpdaterProvider({ children }: { children: ReactNode }) {
   const [version, setVersion] = useState("");
@@ -27,32 +38,69 @@ export function UpdaterProvider({ children }: { children: ReactNode }) {
   const [update, setUpdate] = useState<Update | null>(null);
   const [phase, setPhase] = useState<"idle" | "downloading" | "stopping" | "installing" | "relaunching">("idle");
   const [progress, setProgress] = useState({ done: 0, total: 0 });
-  const dismissed = useRef<string | null>(null);
+  const [mobileUpdate, setMobileUpdate] = useState<MobileUpdate | null>(null);
+  const [mobileBusy, setMobileBusy] = useState(false);
+  const [lastResult, setLastResult] = useState<Ctx["lastResult"]>(null);
+  const dismissed = useRef<string | null>(localStorage.getItem("dismissedUpdate"));
   const mac = isMac();
+  const channel: Ctx["channel"] = !isTauri() ? "web" : isAndroid() ? "android" : isIOS() ? "ios" : "desktop";
+  const dismiss = (v: string | undefined) => { dismissed.current = v ?? null; if (v) localStorage.setItem("dismissedUpdate", v); };
+
+  // Android 原生下载 / 安装进度回调
+  useEffect(() => {
+    const w = window as unknown as { __gptUpdateEvent?: (e: { stage: string; message: string }) => void };
+    w.__gptUpdateEvent = (e) => {
+      setMobileBusy(false);
+      if (e.stage === "error") toast.error("更新失败", { description: e.message, duration: 10000 });
+      else toast.info(e.message);
+    };
+    return () => { delete w.__gptUpdateEvent; };
+  }, []);
 
   useEffect(() => { if (isTauri()) import("@tauri-apps/api/app").then((m) => m.getVersion()).then(setVersion); }, []);
 
+  const report = (manual: boolean, r: Parameters<typeof manualCheckMessage>[0]) => {
+    const m = manualCheckMessage(r);
+    setLastResult({ ok: m.level !== "error", text: m.text, at: Date.now() });
+    if (!manual) return;
+    if (m.level === "error") toast.error(m.text, { description: "请检查网络后重试，或前往 GitHub Releases 页面手动下载。" });
+    else if (m.level === "success") toast.success(m.text);
+  };
+
   const check = useCallback(async (manual: boolean) => {
-    // 移动端通过 GitHub Releases 下载新版 APK / IPA 覆盖安装，不使用桌面自动更新
-    if (!isDesktopApp()) { if (manual) toast.info(isMobileApp() ? "移动端请前往 GitHub Releases 下载新版安装包" : "浏览器调试模式不支持更新"); return; }
+    if (!isTauri()) { if (manual) toast.info("浏览器调试模式不支持更新"); return; }
     setChecking(true);
     try {
-      const { check } = await import("@tauri-apps/plugin-updater");
-      const u = await check();
-      if (u) {
-        if (manual || dismissed.current !== u.version) setUpdate(u);
-      } else if (manual) toast.success("已是最新版本");
+      if (isDesktopApp()) {
+        const { check } = await import("@tauri-apps/plugin-updater");
+        const u = await check();
+        if (u) {
+          report(manual, { kind: "available", version: u.version });
+          if (manual || dismissed.current !== u.version) setUpdate(u);
+        } else report(manual, { kind: "latest" });
+      } else {
+        const current = version || (await import("@tauri-apps/api/app").then((m) => m.getVersion()));
+        const platform = updatePlatform({ tauri: true, android: isAndroid(), ios: isIOS(), mac });
+        const r = await checkLatestRelease(current, platform);
+        if (r.kind === "available") {
+          report(manual, { kind: "available", version: r.release.version });
+          if (manual || dismissed.current !== r.release.version) setMobileUpdate({ release: r.release, asset: r.asset });
+        } else report(manual, { kind: "latest" });
+      }
     } catch (e) {
-      if (manual) toast.error("检查更新失败", { description: "无法连接更新服务器，请检查网络后重试。" + (e ? `（${String(e).slice(0, 80)}）` : "") });
+      // 失败时只提示失败原因，绝不显示“已是最新版本”
+      report(manual, { kind: "error", error: e });
     } finally { setChecking(false); }
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version]);
 
   useEffect(() => {
-    if (!autoCheck || !isDesktopApp()) return;
+    if (!autoCheck || !isTauri()) return;
     const t = setTimeout(() => check(false), FIRST_CHECK_DELAY);
     const iv = setInterval(() => check(false), CHECK_INTERVAL);
     return () => { clearTimeout(t); clearInterval(iv); };
-  }, [autoCheck, check]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoCheck]);
 
   const install = async () => {
     if (!update) return;
@@ -77,15 +125,31 @@ export function UpdaterProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const mobileInstall = async () => {
+    const mu = mobileUpdate;
+    if (!mu) return;
+    const br = androidBridge();
+    if (isAndroid() && br?.installUpdate && mu.asset) {
+      const r = br.installUpdate(mu.asset.url, mu.asset.name);
+      if (r.startsWith("ok")) { setMobileBusy(true); toast.info("正在下载新版本，可在通知栏查看进度；下载完成后会打开系统安装界面"); setMobileUpdate(null); return; }
+      if (r === "permission") { toast.info("请在系统设置中允许「GPT 生图」安装未知应用，返回后再点一次“下载并安装”", { duration: 10000 }); return; }
+      toast.error("无法开始下载", { description: r.replace(/^error:/, "") });
+      return;
+    }
+    // iOS / 无原生桥：打开下载页（系统浏览器）
+    try { await openExternal(mu.asset && isAndroid() ? mu.asset.url : mu.release.pageUrl); }
+    catch (e) { toast.error("无法打开下载页", { description: String(e) }); }
+  };
+
   const pct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
   const mb = (n: number) => (n / 1048576).toFixed(1);
   const busy = phase !== "idle";
 
   return (
-    <UpdaterCtx.Provider value={{ version, checking, autoCheck, checkNow: () => check(true),
+    <UpdaterCtx.Provider value={{ version, checking, autoCheck, lastResult, channel, checkNow: () => check(true),
       setAutoCheck: (v) => { setAuto(v); localStorage.setItem("autoUpdate", v ? "1" : "0"); } }}>
       {children}
-      <Dialog open={!!update} onOpenChange={(v) => { if (!v && !busy) { dismissed.current = update?.version ?? null; setUpdate(null); } }}>
+      <Dialog open={!!update} onOpenChange={(v) => { if (!v && !busy) { dismiss(update?.version); setUpdate(null); } }}>
         <DialogContent className="sm:max-w-md" showCloseButton={!busy}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2"><Sparkles className="size-5 text-primary" />发现新版本 {update?.version}</DialogTitle>
@@ -104,8 +168,31 @@ export function UpdaterProvider({ children }: { children: ReactNode }) {
             </div>
           )}
           <DialogFooter>
-            <Button variant="outline" disabled={busy} onClick={() => { dismissed.current = update?.version ?? null; setUpdate(null); }}>稍后</Button>
+            <Button variant="outline" disabled={busy} onClick={() => { dismiss(update?.version); setUpdate(null); }}>稍后</Button>
             <Button disabled={busy} onClick={install}>{busy ? <RefreshCw className="animate-spin" /> : <Download />}立即更新</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 移动端：GitHub 最新正式版 */}
+      <Dialog open={!!mobileUpdate} onOpenChange={(v) => { if (!v) { dismiss(mobileUpdate?.release.version); setMobileUpdate(null); } }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Sparkles className="size-5 text-primary" />发现新版本 {mobileUpdate?.release.version}</DialogTitle>
+            <DialogDescription>
+              当前版本 {version}。
+              {isAndroid()
+                ? "将下载新版 APK 并打开系统安装界面，需要你在系统中确认安装（首次需允许本应用“安装未知应用”）。签名一致时覆盖安装会保留数据。"
+                : "iOS 版为未签名 IPA，无法在应用内直接更新：请下载 IPA 后用 AltStore / SideStore / Sideloadly 以你的 Apple ID 重新签名安装（同一 Bundle ID 覆盖安装会保留数据）。"}
+            </DialogDescription>
+          </DialogHeader>
+          {mobileUpdate?.release.notes && <div className="max-h-64 overflow-y-auto rounded-lg border bg-muted/40 p-3 text-xs whitespace-pre-wrap">{mobileUpdate.release.notes}</div>}
+          {mobileUpdate?.asset && <div className="text-xs text-muted-foreground">安装包：{mobileUpdate.asset.name}（{formatSize(mobileUpdate.asset.size)}）</div>}
+          <DialogFooter className="max-md:flex-col-reverse max-md:gap-2">
+            <Button variant="outline" onClick={() => { dismiss(mobileUpdate?.release.version); setMobileUpdate(null); }}>稍后</Button>
+            {isAndroid() && mobileUpdate?.asset
+              ? <Button disabled={mobileBusy} onClick={mobileInstall}><Download />下载并安装</Button>
+              : <Button onClick={mobileInstall}><ExternalLink />打开下载页</Button>}
           </DialogFooter>
         </DialogContent>
       </Dialog>

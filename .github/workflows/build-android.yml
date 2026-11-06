@@ -77,6 +77,10 @@ jobs:
         working-directory: app
         run: npm ci
 
+      - name: 前端单元测试（版本比较 / 更新检查 / 平台判断）
+        working-directory: app
+        run: npm test
+
       - name: 初始化 Android 工程（仓库已提交 gen/android 时跳过）
         working-directory: app
         run: |

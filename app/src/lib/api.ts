@@ -229,8 +229,8 @@ export async function uploadImage(f: File): Promise<ImageInput> {
   return { path: data.path, name: f.name || data.name };
 }
 
-interface AndroidBridge { saveImage(path: string, name: string): string; shareImage(path: string, name: string): string }
-const androidBridge = () => (window as unknown as { GPTImageAndroid?: AndroidBridge }).GPTImageAndroid;
+interface AndroidBridge { saveImage(path: string, name: string): string; shareImage(path: string, name: string): string; installUpdate?(url: string, name: string): string }
+export const androidBridge = () => (window as unknown as { GPTImageAndroid?: AndroidBridge }).GPTImageAndroid;
 
 async function fileBlob(path: string) {
   const r = await fetch(fileURL(path));
@@ -293,4 +293,11 @@ export function pickTextFile(accept = ".json,application/json,text/plain"): Prom
     input.onchange = async () => resolve(input.files?.[0] ? await input.files[0].text() : null);
     input.click();
   });
+}
+
+/** 用系统浏览器 / 系统应用打开链接（Tauri 内通过 opener 插件，浏览器调试模式用新标签页） */
+export async function openExternal(url: string) {
+  if (!isTauri()) { window.open(url, "_blank", "noopener"); return; }
+  const { openUrl } = await import("@tauri-apps/plugin-opener");
+  await openUrl(url);
 }

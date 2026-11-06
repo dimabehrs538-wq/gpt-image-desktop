@@ -66,6 +66,11 @@ jobs:
           conf = json.load(open("app/src-tauri/tauri.conf.json", encoding="utf-8"))
           if conf["version"] != version:
               sys.exit(f"标签 {tag} 与 tauri.conf.json 版本 {conf['version']} 不一致")
+          import re as _re
+          pkg = json.load(open("app/package.json", encoding="utf-8"))["version"]
+          cargo = _re.search(r'^version = "([^"]+)"', open("app/src-tauri/Cargo.toml", encoding="utf-8").read(), _re.M).group(1)
+          if not (pkg == cargo == version):
+              sys.exit(f"版本不一致：tag={version} package.json={pkg} Cargo.toml={cargo}")
           base = f"https://github.com/{repo}/releases/download/{tag}"
           def entry(pattern):
               files = [f for f in glob.glob(f"release/{pattern}") if not f.endswith(".sig")]
@@ -114,12 +119,32 @@ jobs:
           # APK 签名复核（runner 预装 Android build-tools）
           APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)/apksigner"
           for f in *.apk; do "$APKSIGNER" verify --verbose "$f" > "$RUNNER_TEMP/apksigner.txt"; head -n 4 "$RUNNER_TEMP/apksigner.txt"; done
+          # 桌面端自动更新：latest.json 必须覆盖三个平台，且每个签名都能被 tauri.conf.json 中的公钥验证
+          if [ -f latest.json ]; then
+            python3 -c "import cryptography" 2>/dev/null || python3 -m pip install --quiet --break-system-packages cryptography
+            python3 ../scripts/verify-updater-sig.py --latest-json latest.json --dir .
+            python3 - <<'PY'
+          import json, os, sys
+          d = json.load(open("latest.json", encoding="utf-8"))
+          need = {"windows-x86_64", "darwin-aarch64", "darwin-x86_64"}
+          missing = need - set(d["platforms"])
+          if missing: sys.exit(f"latest.json 缺少平台：{sorted(missing)}")
+          if d["version"] != os.environ["TAG"].lstrip("v"): sys.exit("latest.json 版本与标签不一致")
+          for k, v in d["platforms"].items():
+              if f"/releases/download/{os.environ['TAG']}/" not in v["url"]: sys.exit(f"{k} 下载地址不指向本次发布：{v['url']}")
+          print("latest.json 平台与地址校验通过：", ", ".join(sorted(d["platforms"])))
+          PY
+          fi
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
-          if [ "$HAS_ANDROID_KEYSTORE" = "true" ]; then AKS="使用仓库配置的正式签名密钥，可覆盖升级"; else AKS="本版本使用 CI 临时生成的签名密钥：后续版本签名不同，升级前需先卸载旧版"; fi
-          if [ -f latest.json ]; then UPD="已附带 \`latest.json\` 与 \`.sig\` 更新签名，桌面端可在「系统设置 → 软件更新」中自动更新。"; else UPD="本次构建 **未配置更新签名私钥**（\`TAURI_SIGNING_PRIVATE_KEY\`），因此 **没有 \`latest.json\` / \`.sig\`，桌面端自动更新暂不可用**，请手动下载新版本覆盖安装。"; fi
+          if [ "$HAS_ANDROID_KEYSTORE" = "true" ]; then AKS="使用项目固定签名密钥，此后版本可在应用内下载并由系统安装器覆盖升级（保留数据）"; else AKS="本版本使用 CI 临时生成的签名密钥：后续版本签名不同，升级前需先卸载旧版"; fi
+          if [ -f latest.json ]; then UPD="已附带 \`latest.json\` 与 \`.sig\` 更新签名（Windows NSIS / macOS .app.tar.gz），已安装的桌面端会在启动后及每 4 小时检查，或在「系统设置 → 软件更新」手动检查。"; else UPD="本次构建 **未配置更新签名私钥**（\`TAURI_SIGNING_PRIVATE_KEY\`），因此 **没有 \`latest.json\` / \`.sig\`，桌面端自动更新暂不可用**，请手动下载新版本覆盖安装。"; fi
+          git -C .. fetch -q --force origin "refs/tags/${TAG}:refs/tags/${TAG}" || true
+          CHANGES="$(git -C .. tag -l --format='%(contents)' "$TAG" | sed '/^-----BEGIN PGP/,$d')"
           cat > ../release-notes.md <<EOF2
           ## GPT 生图工作室 ${TAG}
+
+          ${CHANGES}
 
           调用 OpenAI 兼容 GPT 生图接口（\`/images/generations\`、\`/images/edits\`）的跨平台应用：多分组 baseUrl / apiKey 配置、文生图、多图编辑、本地画廊。
 
@@ -134,7 +159,7 @@ jobs:
 
           **自动更新**：${UPD}
 
-          **测试情况**：Go 单元测试、Rust 移动内核单元测试、Go / Rust 双内核协议一致性对比与端到端测试、安装包结构校验均在 CI 中通过；各平台安装包 **尚未在真实设备上完成安装验收**。
+          **测试情况**：Go 单元测试、Rust 移动内核单元测试、前端更新逻辑单元测试、Go / Rust 双内核协议一致性对比与端到端测试、安装包结构校验、更新签名校验均在 CI 中通过；各平台安装包 **尚未在真实设备上完成安装验收**。
 
           校验和见 \`SHA256SUMS.txt\`。
           EOF2

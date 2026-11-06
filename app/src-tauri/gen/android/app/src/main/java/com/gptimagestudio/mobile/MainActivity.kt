@@ -25,6 +25,6 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     // 原生桥：保存到系统相册 / 调起系统分享（Android WebView 不支持 Web Share API 与 <a download>）
-    webView.addJavascriptInterface(ImageBridge(this), "GPTImageAndroid")
+    webView.addJavascriptInterface(ImageBridge(this, UpdateInstaller(this, webView)), "GPTImageAndroid")
   }
 }

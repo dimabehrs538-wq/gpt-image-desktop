@@ -1,6 +1,6 @@
 [package]
 name = "imagegen-mobile-core"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "GPT 生图工作室移动端（Android / iOS）进程内内核：与 Go imagegend 100% 兼容的 /api/* REST + SSE 协议"
 publish = false

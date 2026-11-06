@@ -15,9 +15,11 @@ import java.io.File
  * - saveImage(path, name)：写入系统相册 Pictures/GPTImageStudio（Android 10+ 无需存储权限），返回 "ok:<uri>" / "unsupported" / "error:<原因>"
  * - shareImage(path, name)：复制到缓存目录后通过 FileProvider 调起系统分享面板，返回 "ok" / "error:<原因>"
  *
+ * - installUpdate(url, name)：下载本项目 Releases 中的新版 APK 并交给系统安装器（需用户确认），见 UpdateInstaller
+ *
  * 只允许读取本应用沙盒内（内核输出目录）的图片文件。
  */
-class ImageBridge(private val activity: Activity) {
+class ImageBridge(private val activity: Activity, private val updater: UpdateInstaller) {
   private val allowedExt = setOf("png", "jpg", "jpeg", "webp", "gif")
 
   private fun mimeOf(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
@@ -89,4 +91,7 @@ class ImageBridge(private val activity: Activity) {
       "error:" + (e.message ?: e.javaClass.simpleName)
     }
   }
+
+  @JavascriptInterface
+  fun installUpdate(url: String, name: String): String = updater.start(url, name)
 }
