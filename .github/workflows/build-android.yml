@@ -33,14 +33,15 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: 安装 Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: 安装 Android NDK
+      # ubuntu-latest 已预装 Android SDK（$ANDROID_HOME）与 cmdline-tools，这里只补齐 NDK / 平台 / 构建工具
+      - name: 安装 Android SDK 组件与 NDK
         run: |
           set -euo pipefail
-          sdkmanager --install "ndk;${NDK_VERSION}" "platforms;android-36" "build-tools;35.0.0" > /dev/null
+          SDKM="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin | sort -V | tail -n1)/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" --install "ndk;${NDK_VERSION}" "platforms;android-36" "build-tools;35.0.0" "platform-tools" > /dev/null
           echo "NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
