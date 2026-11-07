@@ -35,6 +35,25 @@ steps = [
   ("预览错误", "POST", "/api/groups/preview", {"baseUrl":"ftp://x","appendV1":True}, True),
   ("测试连接", "POST", "/api/groups/mock/test", None, True),
   ("测试不存在", "POST", "/api/groups/none/test", None, True),
+  ("模型缓存空", "GET", "/api/models", None, True),
+  ("拉取模型", "POST", "/api/groups/mock/models", None, True),
+  ("拉取去重", "POST", "/api/groups/mock/models", None, True),
+  ("另一组", "POST", "/api/groups", {"name":"alt","baseUrl":f"http://127.0.0.1:{M}/alt","appendV1":True,"apiKey":K}, True),
+  ("拉取另一组", "POST", "/api/groups/alt/models", None, True),
+  ("无image组", "POST", "/api/groups", {"name":"noimg","baseUrl":f"http://127.0.0.1:{M}/noimg/v1","apiKey":K}, True),
+  ("拉取无image", "POST", "/api/groups/noimg/models", None, True),
+  ("空列表组", "POST", "/api/groups", {"name":"empty","baseUrl":f"http://127.0.0.1:{M}/empty/v1","apiKey":K}, True),
+  ("拉取空列表", "POST", "/api/groups/empty/models", None, True),
+  ("非标准组", "POST", "/api/groups", {"name":"bad","baseUrl":f"http://127.0.0.1:{M}/malformed/v1","apiKey":K}, True),
+  ("拉取非标准", "POST", "/api/groups/bad/models", None, True),
+  ("不支持组", "PUT", "/api/groups/bad", {"baseUrl":f"http://127.0.0.1:{M}/nope/v1","apiKey":""}, True),
+  ("拉取404", "POST", "/api/groups/bad/models", None, True),
+  ("错误密钥组", "PUT", "/api/groups/noimg", {"baseUrl":f"http://127.0.0.1:{M}/v1","apiKey":"sk-wrong-cmp-00001111"}, True),
+  ("拉取401", "POST", "/api/groups/noimg/models", None, True),
+  ("拉取不存在", "POST", "/api/groups/none/models", None, True),
+  ("改名迁移", "PUT", "/api/groups/alt", {"newName":"alt2","baseUrl":f"http://127.0.0.1:{M}/alt","appendV1":True,"apiKey":""}, True),
+  ("端点变化", "PUT", "/api/groups/empty", {"baseUrl":f"http://127.0.0.1:{M}/alt/v1","apiKey":""}, True),
+  ("模型缓存", "GET", "/api/models", None, True),
   ("导出", "GET", "/api/groups/export", None, True),
   ("导入", "POST", "/api/groups/import", {"json": json.dumps({"default_group":"x","groups":{"x":{"base_url":"https://x.com","api_key":"sk-xxxxxxxxxxxx","model":"m"}}})}, True),
   ("导入空", "POST", "/api/groups/import", {"json": "{}"}, True),
@@ -60,7 +79,7 @@ steps = [
 ]
 bad = 0
 for name, method, path, body, auth in steps:
-    res = []
+    res = []; vals = []
     for port in (18391, 18392):
         raw = None
         if body == "BIN": raw, b = base64.b64decode(png), None
@@ -73,7 +92,21 @@ for name, method, path, body, auth in steps:
                 if j["status"] != "running": data = j; break
                 time.sleep(0.1)
         res.append((code, shape(data)))
+        vals.append(data)
     same = res[0] == res[1]
+    # 模型列表相关步骤额外比对实际值（模型 ID、数量、成功与否、过期标记、错误状态码）
+    if path.endswith("/models") or path == "/api/models":
+        def key_vals(d):
+            if not isinstance(d, dict): return d
+            if "cache" in d: c = d["cache"]; return (d.get("ok"), c["models"], c["total"], c["stale"], c["errorStatus"], c["fetchedAt"] > 0, bool(c["error"]))
+            if "groups" in d: return {k: (v["models"], v["total"], v["stale"], v["errorStatus"], v["fetchedAt"] > 0, bool(v["error"])) for k, v in d["groups"].items()}
+            return d
+        vals = [key_vals(v) for v in vals]
+        if vals[0] != vals[1]:
+            same = False
+            res = [(res[0][0], vals[0]), (res[1][0], vals[1])]
+        elif name in ("拉取模型", "模型缓存"):
+            print(f"    值：{vals[0]}")
     bad += not same
     print(("  ✓ " if same else "  ✗ ") + f"{name:<10} {method} {path}  HTTP {res[0][0]}" + ("" if same else f"\n    Go:   {res[0]}\n    Rust: {res[1]}"))
 print("\n协议一致性：" + ("全部一致 ✔" if not bad else f"{bad} 处不一致 ✗"))

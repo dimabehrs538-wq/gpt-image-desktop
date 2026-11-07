@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { api, eventSourceURL, getCore, notify, setTray, type GenParams, type GroupsResp, type GroupView, type ImageInput, type Job, type Settings, type Status } from "./api";
+import { api, eventSourceURL, getCore, notify, setTray, type GenParams, type GroupsResp, type GroupView, type ImageInput, type Job, type ModelCache, type ModelRefreshResult, type ModelsResp, type Settings, type Status } from "./api";
+import { autoKey, needsAutoFetch } from "./models";
 
 export type Page = "create" | "edit" | "gallery" | "groups" | "settings";
 
@@ -22,6 +23,11 @@ interface Ctx {
   refresh: () => Promise<void>;
   setGroups: (r: GroupsResp) => void;
   run: <T>(fn: () => Promise<T>, ok?: string) => Promise<T | undefined>;
+  /** 各分组的模型列表缓存（来自内核 models.json，重启后可用） */
+  models: Record<string, ModelCache>;
+  modelsLoading: Record<string, boolean>;
+  /** 手动 / 自动刷新某个分组的模型列表；同一分组进行中时复用同一个请求 */
+  refreshModels: (group: string, opts?: { silent?: boolean }) => Promise<ModelRefreshResult | undefined>;
   groupOpen: { open: boolean; edit?: GroupView | null };
   openGroupDialog: (edit?: GroupView | null) => void;
   closeGroupDialog: () => void;
@@ -42,6 +48,44 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [handoff, setHandoff] = useState<Handoff | null>(null);
   const [groupOpen, setGroupOpen] = useState<{ open: boolean; edit?: GroupView | null }>({ open: false });
   const seenDone = useRef(new Set<string>());
+  const [models, setModels] = useState<Record<string, ModelCache>>({});
+  const [modelsLoading, setModelsLoading] = useState<Record<string, boolean>>({});
+  const inflight = useRef(new Map<string, Promise<ModelRefreshResult | undefined>>());
+  const autoTried = useRef(new Set<string>());
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+
+  const loadModels = useCallback(async () => {
+    try {
+      const r = await api<ModelsResp>("GET", "/api/models");
+      setModels(r.groups ?? {});
+      setModelsLoaded(true);
+    } catch { /* 旧版内核不支持时保持空，用户仍可手动输入模型 */ }
+  }, []);
+
+  const refreshModels = useCallback((group: string, opts?: { silent?: boolean }) => {
+    const running = inflight.current.get(group);
+    if (running) return running;
+    const p = (async () => {
+      setModelsLoading((m) => ({ ...m, [group]: true }));
+      try {
+        const r = await api<ModelRefreshResult>("POST", `/api/groups/${encodeURIComponent(group)}/models`);
+        setModels((m) => ({ ...m, [group]: r.cache }));
+        if (!opts?.silent) {
+          if (r.ok) toast.success("模型列表已更新", { description: r.message });
+          else toast.error("拉取模型列表失败", { description: r.message, duration: 8000 });
+        }
+        return r;
+      } catch (e) {
+        if (!opts?.silent) toast.error((e as Error).message || String(e));
+        return undefined;
+      } finally {
+        inflight.current.delete(group);
+        setModelsLoading((m) => ({ ...m, [group]: false }));
+      }
+    })();
+    inflight.current.set(group, p);
+    return p;
+  }, []);
 
   const setGroups = useCallback((r: GroupsResp) => { setGroupList(r.groups ?? []); setDefault(r.defaultGroup ?? ""); }, []);
 
@@ -50,9 +94,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
       api<Status>("GET", "/api/status"), api<GroupsResp>("GET", "/api/groups"), api<Settings>("GET", "/api/settings"), api<{ jobs: Job[] }>("GET", "/api/jobs"),
     ]);
     setStatus(st); setGroups(gs); setSettings(se);
+    loadModels();
     js.jobs.forEach((j) => j.status !== "running" && seenDone.current.add(j.id));
     setJobs(js.jobs);
-  }, [setGroups]);
+  }, [setGroups, loadModels]);
 
   // 连接内核 + SSE（断线自动重连）
   useEffect(() => {
@@ -82,7 +127,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
               }
             }
           } else if (ev.type === "history") setHV((v) => v + 1);
-          else if (ev.type === "groups") setGroups(ev.data as GroupsResp);
+          else if (ev.type === "groups") { setGroups(ev.data as GroupsResp); loadModels(); }
+          else if (ev.type === "models") { const c = ev.data as ModelCache; setModels((m) => ({ ...m, [c.group]: c })); }
           else if (ev.type === "settings") setSettings(ev.data as Settings);
         };
         es.onerror = () => {
@@ -96,7 +142,18 @@ export function DataProvider({ children }: { children: ReactNode }) {
     };
     connect();
     return () => { closed = true; es?.close(); clearTimeout(timer); };
-  }, [refresh, setGroups]);
+  }, [refresh, setGroups, loadModels]);
+
+  // 新增分组 / 尚无缓存 / 端点变化导致缓存失效时，每个会话每个端点只自动拉取一次（失败不自动重试，避免高频请求）
+  useEffect(() => {
+    if (!connected || !modelsLoaded) return;
+    for (const g of groups) {
+      if (needsAutoFetch(g, models[g.name], autoTried.current)) {
+        autoTried.current.add(autoKey(g));
+        refreshModels(g.name, { silent: true });
+      }
+    }
+  }, [connected, modelsLoaded, groups, models, refreshModels]);
 
   // 托盘提示
   const running = jobs.filter((j) => j.status === "running").length;
@@ -121,6 +178,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   return (
     <DataCtx.Provider value={{
       connected, status, groups, defaultGroup, settings, jobs, historyVersion, page, handoff, go, clearHandoff: () => setHandoff(null), refresh, setGroups, run,
+      models, modelsLoading, refreshModels,
       groupOpen, openGroupDialog: (edit) => setGroupOpen({ open: true, edit }), closeGroupDialog: () => setGroupOpen({ open: false }),
     }}>
       {children}

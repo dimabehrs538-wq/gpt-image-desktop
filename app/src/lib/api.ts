@@ -32,6 +32,14 @@ export interface Job {
   error?: string; items: HistoryItem[];
 }
 export interface ProbeResult { ok: boolean; status: number; latencyMs: number; message: string; url: string; modelCount: number; modelListed: boolean }
+/** 分组模型列表缓存（内核 GET /api/models、POST /api/groups/{name}/models 返回；不含任何密钥） */
+export interface ModelCache {
+  group: string; models: string[]; total: number; fetchedAt: number; effectiveBaseUrl: string;
+  /** 分组的 baseUrl 或密钥已变化：旧列表不再返回，需要重新拉取 */
+  stale: boolean; error: string; errorStatus: number; errorAt: number; filter: string;
+}
+export interface ModelsResp { groups: Record<string, ModelCache>; filter: string }
+export interface ModelRefreshResult { ok: boolean; message: string; cache: ModelCache }
 export interface ImageInput { path?: string; dataUrl?: string; name?: string }
 export interface GenParams {
   group: string; model: string; prompt: string; size: string; quality: string; background: string; outputFormat: string; n: number; name?: string;

@@ -2,7 +2,7 @@
 """本地 Mock OpenAI 兼容生图接口（仅标准库），用于联调与端到端测试。
 
 用法：python3 scripts/mock-openai.py [--port 18080] [--key sk-mock-123456789]
-接口：GET /v1/models、POST /v1/images/generations、POST /v1/images/edits、GET /files/<name>.png
+接口：GET /v1/models（/<变体>/v1/models：alt 另一组模型、noimg 无 image 模型、empty 空列表、malformed 非标准、html 非 JSON、其它 404）、POST /v1/images/generations、POST /v1/images/edits、GET /files/<name>.png
 - 鉴权：Authorization: Bearer <key>，错误时返回 OpenAI 风格错误体
 - model 为 "url-model" 时返回 url 字段（测试下载落盘），其余返回 b64_json
 """
@@ -48,8 +48,23 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, self.stats)
         if not self.authed():
             return
-        if self.path == "/v1/models":
-            return self.send(200, {"object": "list", "data": [{"id": m} for m in ("gpt-image-2", "gpt-image-1", "dall-e-3")]})
+        m = re.fullmatch(r"(?:/(\w+))?/v1/models", self.path)
+        if m:
+            H.stats["models"] = H.stats.get("models", 0) + 1
+            variant = m.group(1) or ""
+            ids = {
+                "": ("gpt-image-2", "gpt-image-1", "dall-e-3", "GPT-Image-1-Mini", "gpt-image-1", "gpt-4o", "text-embedding-3-small"),
+                "alt": ("flux-image-pro", "seedream-image-3", "qwen-max"),
+                "noimg": ("gpt-4o", "o3"),
+                "empty": (),
+            }
+            if variant in ids:
+                return self.send(200, {"object": "list", "data": [{"id": x, "object": "model"} for x in ids[variant]]})
+            if variant == "malformed":
+                return self.send(200, {"models": ["gpt-image-1"]})
+            if variant == "html":
+                return self.send(200, b"<html>gateway</html>", "text/html")
+            return self.send(404, {"error": {"message": f"Invalid URL (GET {self.path})", "code": "unknown_url"}})
         self.send(404, {"error": {"message": "not found"}})
 
     def images(self, n, model, size, edit):

@@ -7,14 +7,16 @@ import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, Sele
 import { Segmented } from "@/components/ui/tabs";
 import { Tip } from "@/components/ui/tooltip";
 import { Field } from "@/components/common";
+import { ModelCombobox } from "@/components/ModelCombobox";
 import type { GenParams } from "@/lib/api";
-import { BACKGROUND, FORMATS, MODEL_PRESETS, QUALITY, SIZE_PRESETS, UNSET, sizeValid } from "@/lib/params";
+import { modelForGroup, saveModelPref } from "@/lib/models";
+import { BACKGROUND, FORMATS, QUALITY, SIZE_PRESETS, UNSET, sizeValid } from "@/lib/params";
 import { useData } from "@/lib/store";
 
 const CUSTOM = "__custom__";
 
 export function ParamsPanel({ value, onChange }: { value: GenParams; onChange: (p: GenParams) => void }) {
-  const { groups, defaultGroup, openGroupDialog } = useData();
+  const { groups, defaultGroup, openGroupDialog, models, modelsLoading, refreshModels } = useData();
   const set = <K extends keyof GenParams>(k: K, v: GenParams[K]) => onChange({ ...value, [k]: v });
   const groupName = value.group && groups.some((g) => g.name === value.group) ? value.group : defaultGroup;
   const group = groups.find((g) => g.name === groupName);
@@ -31,7 +33,7 @@ export function ParamsPanel({ value, onChange }: { value: GenParams; onChange: (
           {groups.length === 0 ? (
             <Button variant="outline" className="w-full border-dashed" onClick={() => openGroupDialog(null)}><Plus />配置 baseUrl 与 apiKey</Button>
           ) : (
-            <Select value={groupName} onValueChange={(v) => { if (v === "__new__") openGroupDialog(null); else onChange({ ...value, group: v, model: "" }); }}>
+            <Select value={groupName} onValueChange={(v) => { if (v === "__new__") openGroupDialog(null); else onChange({ ...value, group: v, model: modelForGroup(v) }); }}>
               <SelectTrigger><SelectValue placeholder="选择接口分组" /></SelectTrigger>
               <SelectContent>
                 {groups.map((g) => (
@@ -49,9 +51,11 @@ export function ParamsPanel({ value, onChange }: { value: GenParams; onChange: (
           {group && <div className="truncate font-mono text-[10px] text-muted-foreground" title={group.effectiveBaseUrl}>{group.effectiveBaseUrl} · {group.keyMask || group.keyError}</div>}
         </Field>
 
-        <Field label="模型" hint={group ? `分组默认：${group.model}` : undefined}>
-          <Input value={value.model} list="params-models" className="font-mono text-xs" placeholder={group?.model ?? "gpt-image-2"} onChange={(e) => set("model", e.target.value)} />
-          <datalist id="params-models">{MODEL_PRESETS.map((m) => <option key={m.value} value={m.value}>{m.hint}</option>)}</datalist>
+        <Field label="模型" hint={group ? `留空 = 分组默认 ${group.model}` : undefined}>
+          <ModelCombobox value={value.model} placeholder={group ? `${group.model}（分组默认）` : "gpt-image-2"}
+            cache={group ? models[group.name] : undefined} loading={!!(group && modelsLoading[group.name])}
+            canRefresh={!!group?.keyOk} onRefresh={group ? () => refreshModels(group.name) : undefined}
+            onChange={(m) => { set("model", m); if (groupName) saveModelPref(groupName, m); }} />
         </Field>
 
         <Field label="尺寸 size" hint={!sizeValid(value.size) ? <span className="text-destructive">格式应为 宽x高</span> : undefined}>

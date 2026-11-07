@@ -45,6 +45,21 @@ r=$(curl "${A[@]}" -X POST "$U/api/groups/mock/test"); [ "$(echo "$r" | j 'd["ok
 r=$(curl "${A[@]}" -X POST "$U/api/groups/badkey/test"); echo "$r" | grep -q "sk-wrong-key-00001111" && fail "错误信息泄露密钥"
 ok "错误密钥：$(echo "$r" | j 'd["message"]')"
 
+step "拉取模型列表（GET /models，名称含 image 的自动保存，按分组隔离）"
+r=$(curl "${A[@]}" -X POST "$U/api/groups/mock/models")
+[ "$(echo "$r" | j 'd["cache"]["models"]')" = "['gpt-image-1', 'GPT-Image-1-Mini', 'gpt-image-2']" ] && ok "$(echo "$r" | j 'd["message"]')：$(echo "$r" | j '", ".join(d["cache"]["models"])')" || fail "$r"
+curl "${A[@]}" -X POST "$U/api/groups" -d "{\"name\":\"alt\",\"baseUrl\":\"http://127.0.0.1:$MOCK_PORT/alt\",\"appendV1\":true,\"model\":\"flux-image-pro\",\"apiKey\":\"$KEY\"}" > /dev/null
+r=$(curl "${A[@]}" -X POST "$U/api/groups/alt/models"); [ "$(echo "$r" | j 'd["cache"]["models"]')" = "['flux-image-pro', 'seedream-image-3']" ] && ok "另一分组独立列表：$(echo "$r" | j '", ".join(d["cache"]["models"])')" || fail "$r"
+r=$(curl "${A[@]}" -X POST "$U/api/groups/badkey/models"); echo "$r" | grep -q "sk-wrong-key-00001111" && fail "拉取失败信息泄露密钥"
+[ "$(echo "$r" | j 'd["ok"]')" = False ] && [ "$(echo "$r" | j 'd["cache"]["errorStatus"]')" = 401 ] && ok "错误密钥：$(echo "$r" | j 'd["message"]')" || fail "$r"
+perm=$(stat -c %a "$TMP/home/models.json"); [ "$perm" = 600 ] && ok "models.json 权限 $perm" || fail "models.json 权限 $perm"
+grep -q -e "$KEY" -e "sk-wrong-key-00001111" "$TMP/home/models.json" && fail "models.json 含密钥" || ok "models.json 不含密钥"
+kill $CORE_PID; wait $CORE_PID 2>/dev/null || true
+"$BIN" serve --home "$TMP/home" --api-port "$API_PORT" --token "$TOKEN" --output-dir "$TMP/output/imagegen" >> "$TMP/core.log" 2>&1 & CORE_PID=$!
+for i in $(seq 50); do curl -sf -o /dev/null -H "Authorization: Bearer $TOKEN" "$U/api/status" && break; sleep 0.1; done
+r=$(curl "${A[@]}" "$U/api/models"); [ "$(echo "$r" | j 'len(d["groups"]["mock"]["models"]), len(d["groups"]["alt"]["models"])')" = "(3, 2)" ] && ok "重启内核后缓存仍在（mock 3 个 / alt 2 个）" || fail "$r"
+r=$(curl "${A[@]}" "$U/api/groups"); [ "$(echo "$r" | j '[g["model"] for g in d["groups"] if g["name"]=="mock"][0]')" = gpt-image-2 ] && ok "分组默认模型未被改动"
+
 wait_job() { for i in $(seq 100); do s=$(curl "${A[@]}" "$U/api/jobs/$1"); st=$(echo "$s" | j 'd["status"]'); [ "$st" != running ] && { echo "$s"; return; }; sleep 0.1; done; fail "任务超时"; }
 
 step "文生图 /images/generations（n=2）"

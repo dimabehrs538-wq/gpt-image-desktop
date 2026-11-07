@@ -29,6 +29,7 @@ use crate::config::{self, codex_config_path, effective_base_url, validate_base_u
 use crate::engine::{Engine, Prepared, Request as GenRequest};
 use crate::imageapi::{Client, ProbeResult};
 use crate::log::Logger;
+use crate::models;
 use crate::store::{Item, Query as HQuery, SettingsPatch};
 use crate::util::{new_id, now_ms};
 
@@ -74,6 +75,7 @@ pub struct Server {
     tx: broadcast::Sender<String>,
     sem: Arc<Semaphore>,
     platform: &'static str,
+    models: models::Cache,
 }
 
 type S = State<Arc<Server>>;
@@ -108,6 +110,7 @@ pub fn platform() -> &'static str {
 impl Server {
     pub fn new(token: String, engine: Arc<Engine>, log: Arc<Logger>) -> Arc<Self> {
         let (tx, _) = broadcast::channel(64);
+        let models = models::Cache::new(engine.home.join("models.json"));
         Arc::new(Self {
             token,
             engine,
@@ -117,6 +120,7 @@ impl Server {
             tx,
             sem: Arc::new(Semaphore::new(4)),
             platform: platform(),
+            models,
         })
     }
 
@@ -131,6 +135,8 @@ impl Server {
             .route("/api/groups/{name}", put(update_group).delete(delete_group))
             .route("/api/groups/{name}/default", post(default_group))
             .route("/api/groups/{name}/test", post(test_group))
+            .route("/api/groups/{name}/models", post(refresh_models))
+            .route("/api/models", get(list_models))
             .route("/api/settings", get(get_settings).put(put_settings))
             .route("/api/generate", post(|s: S, b: Bytes| submit(s, b, "generate")))
             .route("/api/edit", post(|s: S, b: Bytes| submit(s, b, "edit")))
@@ -352,8 +358,12 @@ async fn update_group(st: S, Path(name): Path<String>, b: Bytes) -> Response {
         Ok(v) => v,
         Err(r) => return r,
     };
+    let new_name = inp.new_name.trim().to_string();
     if let Err(e) = s.engine.groups.modify(&name, inp) {
         return err(StatusCode::BAD_REQUEST, e);
+    }
+    if !new_name.is_empty() && new_name != name {
+        let _ = s.models.rename(&name, &new_name);
     }
     s.log.log(&format!("更新接口分组 {name}"));
     s.groups_changed();
@@ -365,6 +375,7 @@ async fn delete_group(st: S, Path(name): Path<String>) -> Response {
     if let Err(e) = s.engine.groups.delete(&name) {
         return err(StatusCode::NOT_FOUND, e);
     }
+    let _ = s.models.remove(&name);
     s.log.log(&format!("删除接口分组 {name}"));
     s.groups_changed();
     list_groups(st).await
@@ -416,6 +427,42 @@ async fn test_group(State(s): S, Path(name): Path<String>, b: Bytes) -> Response
     }
     let res = Client::new(Duration::from_secs(20)).probe(&ep).await;
     s.log.log(&format!("测试分组 {}：HTTP {} {}ms", ep.group, res.status, res.latency_ms));
+    ok(res)
+}
+
+/// 各分组已缓存的模型列表（不发起网络请求）。
+async fn list_models(State(s): S) -> Response {
+    match s.engine.groups.load() {
+        Ok(f) => ok(json!({ "groups": s.models.views(&f), "filter": models::FILTER })),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+/// 用该分组自己的 baseUrl 与密钥请求 GET {effectiveBaseUrl}/models，筛选名称含 image 的模型并缓存。
+async fn refresh_models(State(s): S, Path(name): Path<String>) -> Response {
+    let f = match s.engine.groups.load() {
+        Ok(f) => f,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    let Some(g) = f.groups.get(&name) else {
+        return err(StatusCode::NOT_FOUND, format!("接口分组不存在：{name:?}"));
+    };
+    let cur = models::current_of(&name, g);
+    let (key, mut kerr) = match g.resolve_key() {
+        Ok(k) => (k, None),
+        Err(e) => (String::new(), Some(e)),
+    };
+    if let Err(e) = validate_base_url(&g.base_url) {
+        kerr = Some(e);
+    }
+    let kerr = kerr.map(|e| format!("分组 {name}：{e}"));
+    let res = s.models.refresh(&cur, &key, kerr).await;
+    if res.ok {
+        s.log.log(&format!("拉取分组 {name} 模型列表：{}", res.message));
+    } else {
+        s.log.log(&format!("拉取分组 {name} 模型列表失败：{}", res.message));
+    }
+    s.publish("models", serde_json::to_value(&res.cache).unwrap());
     ok(res)
 }
 

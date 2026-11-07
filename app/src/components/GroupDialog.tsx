@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Segmented } from "@/components/ui/tabs";
 import { Field } from "@/components/common";
+import { ModelCombobox } from "@/components/ModelCombobox";
 import { api, effectiveBaseUrl, type GroupInput, type GroupsResp, type ProbeResult } from "@/lib/api";
 import { MODEL_PRESETS } from "@/lib/params";
 import { useData } from "@/lib/store";
@@ -25,7 +26,7 @@ function slug(s: string) {
 }
 
 export function GroupDialog() {
-  const { groupOpen, closeGroupDialog, setGroups, groups } = useData();
+  const { groupOpen, closeGroupDialog, setGroups, groups, models, modelsLoading, refreshModels } = useData();
   const edit = groupOpen.edit ?? null;
   const [f, setF] = useState<GroupInput>(empty);
   const [showKey, setShowKey] = useState(false);
@@ -52,6 +53,10 @@ export function GroupDialog() {
   const nameOk = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(nameVal);
   const keyOk = f.keySource === "literal" ? (!!f.apiKey.trim() || (!!edit && edit.keySource === "literal")) : f.keySource === "env" ? !!f.apiKeyEnv.trim() : !!(f.apiKeyRef?.path && f.apiKeyRef.field);
   const valid = urlOk && nameOk && keyOk;
+  // 已保存分组且接口地址 / 密钥未在表单中改动时，才展示并允许刷新该组已缓存的模型列表
+  const live = edit ? groups.find((g) => g.name === edit.name) : undefined;
+  const sameEndpoint = !!live && eff === live.effectiveBaseUrl && f.keySource === (live.keySource === "none" ? "literal" : live.keySource) && !f.apiKey.trim();
+  const modelCache = live && sameEndpoint ? models[live.name] : undefined;
 
   const save = async (test: boolean) => {
     setBusy(test ? "test" : "save");
@@ -116,9 +121,10 @@ export function GroupDialog() {
           <div><span className="mr-2 rounded bg-sky-500/15 px-1 text-sky-700 dark:text-sky-400">GET&nbsp;</span>{urlOk ? `${eff}/models` : "—"}<span className="ml-2 font-sans text-muted-foreground">（测试连接）</span></div>
         </div>
 
-        <Field label="默认模型" hint="可自由输入任意模型名">
-          <Input value={f.model} list="model-presets" className="font-mono text-xs" placeholder="gpt-image-2" onChange={(e) => set("model", e.target.value)} />
-          <datalist id="model-presets">{MODEL_PRESETS.map((m) => <option key={m.value} value={m.value}>{m.hint}</option>)}</datalist>
+        <Field label="默认模型" hint={live ? (sameEndpoint ? "可从拉取的列表选择，也可自由输入" : "接口地址或密钥已改动：保存后可重新拉取模型列表") : "可自由输入任意模型名；保存后会自动拉取模型列表"}>
+          <ModelCombobox value={f.model} placeholder="gpt-image-2" onChange={(m) => set("model", m)}
+            cache={modelCache} loading={!!(live && modelsLoading[live.name])}
+            canRefresh={!!live?.keyOk && sameEndpoint} onRefresh={live ? () => refreshModels(live.name) : undefined} />
           <div className="flex flex-wrap gap-1.5 pt-1">
             {MODEL_PRESETS.map((m) => (
               <button key={m.value} type="button" onClick={() => set("model", m.value)}

@@ -23,6 +23,7 @@ import (
 	"github.com/gpt-image-desktop/core/internal/config"
 	"github.com/gpt-image-desktop/core/internal/engine"
 	"github.com/gpt-image-desktop/core/internal/imageapi"
+	"github.com/gpt-image-desktop/core/internal/models"
 	"github.com/gpt-image-desktop/core/internal/store"
 	"github.com/gpt-image-desktop/core/internal/thumb"
 )
@@ -60,6 +61,7 @@ type Event struct {
 type Server struct {
 	Token  string
 	Engine *engine.Engine
+	Models *models.Cache
 	Log    *log.Logger
 	start  time.Time
 
@@ -74,7 +76,7 @@ func New(token string, e *engine.Engine, lg *log.Logger) *Server {
 	if lg == nil {
 		lg = log.New(os.Stderr, "", log.LstdFlags)
 	}
-	return &Server{Token: token, Engine: e, Log: lg, start: time.Now(), jobs: map[string]*Job{}, subs: map[chan Event]struct{}{}, sem: make(chan struct{}, 4)}
+	return &Server{Token: token, Engine: e, Models: models.New(filepath.Join(e.Home, "models.json")), Log: lg, start: time.Now(), jobs: map[string]*Job{}, subs: map[chan Event]struct{}{}, sem: make(chan struct{}, 4)}
 }
 
 // Handler 返回带鉴权与 CORS 的路由。
@@ -92,6 +94,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/groups/{name}", s.deleteGroup)
 	mux.HandleFunc("POST /api/groups/{name}/default", s.defaultGroup)
 	mux.HandleFunc("POST /api/groups/{name}/test", s.testGroup)
+	mux.HandleFunc("POST /api/groups/{name}/models", s.refreshModels)
+	mux.HandleFunc("GET /api/models", s.listModels)
 	mux.HandleFunc("GET /api/settings", s.getSettings)
 	mux.HandleFunc("PUT /api/settings", s.putSettings)
 	mux.HandleFunc("POST /api/generate", s.submit("generate"))
@@ -263,6 +267,9 @@ func (s *Server) updateGroup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
+	if nn := strings.TrimSpace(in.NewName); nn != "" && nn != name {
+		_ = s.Models.Rename(name, nn)
+	}
 	s.Log.Printf("更新接口分组 %s", name)
 	s.groupsChanged()
 	s.listGroups(w, r)
@@ -274,6 +281,7 @@ func (s *Server) deleteGroup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, err.Error())
 		return
 	}
+	_ = s.Models.Remove(name)
 	s.Log.Printf("删除接口分组 %s", name)
 	s.groupsChanged()
 	s.listGroups(w, r)
@@ -321,6 +329,47 @@ func (s *Server) testGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	res := imageapi.New(20*time.Second).Probe(r.Context(), ep)
 	s.Log.Printf("测试分组 %s：HTTP %d %dms", ep.Group, res.Status, res.LatencyMs)
+	writeJSON(w, 200, res)
+}
+
+// listModels 返回各分组已缓存的模型列表（不发起网络请求）。
+func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
+	f, err := s.Engine.Groups.Load()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"groups": s.Models.Views(f), "filter": models.Filter})
+}
+
+// refreshModels 用该分组自己的 baseUrl 与密钥请求 GET {effectiveBaseUrl}/models，筛选名称含 image 的模型并缓存。
+func (s *Server) refreshModels(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	f, err := s.Engine.Groups.Load()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	g := f.Groups[name]
+	if g == nil {
+		writeErr(w, 404, fmt.Sprintf("接口分组不存在：%q", name))
+		return
+	}
+	cur := models.CurrentOf(name, g)
+	key, kerr := g.ResolveKey()
+	if err := config.ValidateBaseURL(g.BaseURL); err != nil {
+		kerr = err
+	}
+	if kerr != nil {
+		kerr = fmt.Errorf("分组 %s：%v", name, kerr)
+	}
+	res := s.Models.Refresh(r.Context(), cur, key, kerr)
+	if res.OK {
+		s.Log.Printf("拉取分组 %s 模型列表：%s", name, res.Message)
+	} else {
+		s.Log.Printf("拉取分组 %s 模型列表失败：%s", name, res.Message)
+	}
+	s.Publish("models", res.Cache)
 	writeJSON(w, 200, res)
 }
 

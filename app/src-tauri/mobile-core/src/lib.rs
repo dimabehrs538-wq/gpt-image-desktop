@@ -8,6 +8,7 @@ pub mod config;
 pub mod engine;
 pub mod imageapi;
 pub mod log;
+pub mod models;
 pub mod server;
 pub mod store;
 pub mod thumb;

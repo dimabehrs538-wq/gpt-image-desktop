@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CheckCircle2, Copy, Download, FileJson, KeyRound, Loader2, MoreHorizontal, Pencil, Plus, Server, Star, Trash2, Upload, XCircle, Zap } from "lucide-react";
+import { CheckCircle2, Copy, Download, FileJson, KeyRound, Loader2, MoreHorizontal, Pencil, Plus, RefreshCw, Server, Star, Trash2, Upload, XCircle, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,13 +12,18 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Empty, PageHeader } from "@/components/common";
 import { api, isDesktopApp, isMobileApp, pickJsonFile, pickTextFile, type GroupView, type GroupsResp, type ProbeResult } from "@/lib/api";
+import { cacheStatus } from "@/lib/models";
 import { useData } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 const SRC_CN = { literal: "明文 api_key", env: "环境变量", ref: "引用文件", none: "未配置" } as const;
 
 function GroupCard({ g }: { g: GroupView }) {
-  const { openGroupDialog, setGroups, run } = useData();
+  const { openGroupDialog, setGroups, run, models, modelsLoading, refreshModels } = useData();
+  const mc = models[g.name];
+  const mLoading = !!modelsLoading[g.name];
+  const mst = cacheStatus(mc, mLoading);
+  const [showModels, setShowModels] = useState(false);
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [testing, setTesting] = useState(false);
   const [del, setDel] = useState(false);
@@ -64,6 +69,22 @@ function GroupCard({ g }: { g: GroupView }) {
         <div className="space-y-0.5 rounded-md bg-muted/50 px-2.5 py-2 font-mono text-[10.5px] text-muted-foreground">
           <div className="truncate" title={g.generationsUrl}>POST {g.generationsUrl}</div>
           <div className="truncate" title={g.editsUrl}>POST {g.editsUrl}</div>
+        </div>
+        <div className="space-y-1.5 rounded-md border px-2.5 py-2">
+          <div className="flex items-center gap-2">
+            <span className="font-medium">模型列表</span>
+            {mc && !mc.stale && mc.fetchedAt > 0 && <Badge variant="outline" className="h-4 px-1 text-[10px]">{mc.models.length} / {mc.total}</Badge>}
+            <span className="ml-auto" />
+            {mc && !mc.stale && mc.models.length > 0 && <Button size="sm" variant="ghost" className="h-6 px-2" onClick={() => setShowModels((v) => !v)}>{showModels ? "收起" : "查看"}</Button>}
+            <Button size="sm" variant="outline" className="h-6 px-2" disabled={mLoading || !g.keyOk} onClick={() => refreshModels(g.name)}>
+              {mLoading ? <Loader2 className="animate-spin" /> : <RefreshCw />}{mc?.fetchedAt ? "刷新" : "拉取"}
+            </Button>
+          </div>
+          <div className={cn("text-[10.5px] leading-snug", mst.tone === "error" ? "text-destructive" : mst.tone === "warn" ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground")}>{mst.text}</div>
+          {showModels && mc && !mc.stale && (
+            <div className="flex flex-wrap gap-1">{mc.models.map((m) => <span key={m} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10.5px]">{m}</span>)}</div>
+          )}
+          <div className="text-[10px] text-muted-foreground">按名称匹配（含 image）自动保存，非能力检测；不会改动默认模型</div>
         </div>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" disabled={testing} onClick={test}>{testing ? <Loader2 className="animate-spin" /> : <Zap />}测试连接</Button>

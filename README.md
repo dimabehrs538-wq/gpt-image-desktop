@@ -29,6 +29,11 @@
   - 环境变量 `api_key_env`；
   - 引用文件 `api_key_ref`（`{ "path": "~/.secrets/x.json", "field": "a.b.key" }`）。
 - **测试连接**：向 `{effectiveBaseUrl}/models` 发起鉴权探测，返回可用性、HTTP 状态、延迟，以及模型是否在列表中。
+- **模型列表拉取与下拉选择**：用各分组自己的 baseUrl / appendV1 与密钥调用标准 `GET {effectiveBaseUrl}/models`，自动保存其中 **名称包含 `image`**（不区分大小写，去重排序）的模型 ID 到 数据目录下的 `models.json`（0600，不含任何密钥），重启后仍可用。
+  - 这是 **名称匹配，不是能力检测**：不会用付费生图请求探测，也不会编造模型；名称不含 image 的兼容模型仍可直接手动输入。
+  - 新建分组 / 没有缓存 / baseUrl 或密钥变化导致缓存失效时自动拉取一次（每个会话每个端点一次，失败不自动重试）；「创作」「编辑」参数面板的模型框、分组编辑弹窗和「接口管理」卡片都有手动刷新按钮，卡片显示「image 模型数 / 接口模型总数」。
+  - 各分组列表相互隔离；端点或密钥变化后旧列表标记为失效、不再复用；刷新失败（超时 20 秒、401、404/405 不支持、非标准 JSON 等）保留旧列表并显示原因，此时可手动输入。
+  - 模型框可选可输入：在某分组下选中的模型会记为该分组偏好（只存模型名），切换分组时恢复；留空 = 分组默认模型。拉取列表 **不会** 修改分组默认模型，也不会静默替换你已选的模型（不在列表中时只提示）。
 - **导入 / 导出** `~/.codex/image-api-groups.json`（遵循 `CODEX_HOME`）：文件导入、粘贴 JSON 导入（合并或替换）、导出到文件（0600）、复制 JSON；导出默认 **不含** 明文 `api_key`，需手动勾选。
 
 ### 安全与“无回退”原则
@@ -117,6 +122,7 @@ gpt-image-desktop/
 | 文件 | 说明 |
 | --- | --- |
 | `groups.json` | 接口分组（与 `image-api-groups.json` 同格式，0600） |
+| `models.json` | 各分组拉取到的 image 模型列表缓存（0600，只含模型名、端点与指纹，不含密钥） |
 | `settings.json` | 输出目录、请求超时、文件名前缀 |
 | `history.json` | 作品历史 |
 | `daemon.json` | 运行中内核的 `port` / `token` / `pid`（0600，退出时删除） |
@@ -181,6 +187,8 @@ imagegend status                                 # 查看运行中的内核
 | POST | `/api/groups/{name}/default` · `/test` | 设为默认 · 测试连接（`/models`） |
 | POST | `/api/groups/preview` | baseUrl 规范化预览 |
 | POST / GET | `/api/groups/import` · `/api/groups/export` | 导入（path / json，merge / replace）· 导出 |
+| GET | `/api/models` | 各分组模型列表缓存 `{groups:{name:{models,total,fetchedAt,stale,error,…}}, filter:"image"}` |
+| POST | `/api/groups/{name}/models` | 拉取并保存该分组的 image 模型列表，返回 `{ok, message, cache}`（失败时 `ok=false` 且保留旧列表；SSE 推送 `models` 事件） |
 | GET / PUT | `/api/settings` | 系统设置 |
 | POST | `/api/uploads?name=` | 上传参考图文件流（原始请求体，≤ 64 MB，仅图片），返回 `{name, path}` 供编辑引用 |
 | POST | `/api/generate` · `/api/edit` | 提交异步任务（参考图支持 `path` 或 `dataUrl`） |
@@ -198,10 +206,11 @@ cd core && go test -v ./...      # 单元测试 + httptest 端到端
 CORE=rust ./scripts/e2e.sh       # 同一套闭环跑 Rust 移动内核
 ./scripts/compare-cores.sh       # Go / Rust 双内核逐项比对响应字段结构与状态码
 cd app/src-tauri && cargo test -p imagegen-mobile-core   # Rust 移动内核单元测试
+cd app && npm test               # 前端单测（vitest：更新检查、模型列表状态 / 偏好 / 自动拉取判定）
 cd app && npm run build          # tsc 类型检查 + Vite 打包
 ```
 
-Go 测试覆盖：URL 规范化、密钥脱敏与 Redact、`0600` 权限、三种密钥来源、导入导出、编辑时保留原密钥与重命名、文生图（b64 / url）、多图编辑 `image[]` 顺序与 `mask`、单图 `image` 字段、错误体解析与脱敏、`/models` 探测、防覆盖落盘、历史筛选与删除、缩略图、日志轮换，以及经由本地 API 的“配置 → 测试 → 文生图 → 图生图 → 画廊 → 删除 → SSE”完整流程。
+Go 测试覆盖：URL 规范化、密钥脱敏与 Redact、`0600` 权限、三种密钥来源、导入导出、编辑时保留原密钥与重命名、文生图（b64 / url）、多图编辑 `image[]` 顺序与 `mask`、单图 `image` 字段、错误体解析与脱敏、`/models` 探测、模型列表拉取（名称过滤去重、多分组隔离、空列表 / 非标准响应 / 404 / 401 / 超时、端点变化失效、重启持久化、重命名迁移、不泄露密钥）、防覆盖落盘、历史筛选与删除、缩略图、日志轮换，以及经由本地 API 的“配置 → 测试 → 文生图 → 图生图 → 画廊 → 删除 → SSE”完整流程。
 
 ---
 
@@ -354,7 +363,7 @@ git push origin main --tags
 
 ## 常见问题
 
-- **中转站不返回 `/models`？** 测试连接会如实显示失败信息，但不影响生图；可直接尝试生成。
+- **中转站不返回 `/models`？** 测试连接 / 模型列表拉取会如实显示失败信息，但不影响生图；在模型框直接输入模型名即可生成。
 - **DALL·E 3 报参数错误？** DALL·E 3 只支持 `standard` / `hd` 画质，不支持 `background` / `output_format`，请把这些参数设为“不指定”。
 - **生成很慢 / 超时？** 高画质大图可能需要数分钟，可在「系统设置 → 请求超时」调大（默认 600 秒）。
 - **Mock 联调**：`python3 scripts/mock-openai.py --port 18080 --key sk-mock-123456789`，在应用中新建分组 `http://127.0.0.1:18080` + 该 key 即可完整体验。
