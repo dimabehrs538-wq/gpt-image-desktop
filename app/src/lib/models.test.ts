@@ -47,7 +47,7 @@ describe("cacheStatus", () => {
     expect(cacheStatus(undefined, false).tone).toBe("muted");
     expect(cacheStatus(cache(), true).text).toMatch(/正在拉取/);
     expect(cacheStatus(cache(), false)).toMatchObject({ tone: "ok" });
-    expect(cacheStatus(cache(), false).text).toMatch(/2 个 image 模型（共 5 个）/);
+    expect(cacheStatus(cache(), false).text).toMatch(/2 个 image 模型（接口共 5 个不同模型）/);
     expect(cacheStatus(cache({ stale: true }), false).tone).toBe("warn");
     expect(cacheStatus(cache({ error: "HTTP 401" }), false).text).toMatch(/保留.*2 个模型.*HTTP 401/);
     expect(cacheStatus(cache({ error: "超时", fetchedAt: 0, models: [] }), false).text).toMatch(/^拉取失败/);

@@ -39,11 +39,12 @@ type Entry struct {
 	Fingerprint      string   `json:"fingerprint"`
 	EffectiveBaseURL string   `json:"effectiveBaseUrl"`
 	Models           []string `json:"models"`
-	Total            int      `json:"total"`
-	FetchedAt        int64    `json:"fetchedAt"`
-	Error            string   `json:"error,omitempty"`
-	ErrorStatus      int      `json:"errorStatus,omitempty"`
-	ErrorAt          int64    `json:"errorAt,omitempty"`
+	// Total 为接口返回的不同模型 ID 数（空 id 忽略、重复 id 去重后计数），不是原始 data 数组长度
+	Total       int    `json:"total"`
+	FetchedAt   int64  `json:"fetchedAt"`
+	Error       string `json:"error,omitempty"`
+	ErrorStatus int    `json:"errorStatus,omitempty"`
+	ErrorAt     int64  `json:"errorAt,omitempty"`
 }
 
 type file struct {
@@ -361,7 +362,7 @@ func summary(e *Entry) string {
 		return "接口返回的模型列表为空，可直接手动输入模型名"
 	}
 	if len(e.Models) == 0 {
-		return fmt.Sprintf("接口返回 %d 个模型，但名称都不含 image，可直接手动输入模型名", e.Total)
+		return fmt.Sprintf("接口返回 %d 个不同模型（已去重），但名称都不含 image，可直接手动输入模型名", e.Total)
 	}
-	return fmt.Sprintf("已拉取 %d 个模型，其中 %d 个名称包含 image", e.Total, len(e.Models))
+	return fmt.Sprintf("接口返回 %d 个不同模型（已去重），其中 %d 个名称包含 image", e.Total, len(e.Models))
 }

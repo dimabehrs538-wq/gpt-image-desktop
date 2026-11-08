@@ -143,7 +143,7 @@ func TestErrorsRedacted(t *testing.T) {
 			w.WriteHeader(401)
 			w.Write([]byte(`{"error":{"message":"Incorrect API key provided: ` + testKey + `","type":"invalid_request_error","code":"invalid_api_key"}}`))
 		case "/v1/models":
-			w.Write([]byte(`{"data":[{"id":"gpt-image-2"},{"id":"gpt-4o"}]}`))
+			w.Write([]byte(`{"data":[{"id":"gpt-image-2"},{"id":"gpt-4o"},{"id":"gpt-4o"},{"id":""}]}`))
 		default:
 			w.WriteHeader(502)
 			w.Write([]byte("bad gateway " + testKey))

@@ -34,7 +34,7 @@ function GroupCard({ g }: { g: GroupView }) {
     if (r) setProbe(r);
   };
   return (
-    <Card className={cn("gap-3 py-4 transition-shadow hover:shadow-md", g.isDefault && "border-primary/40 ring-1 ring-primary/15")}>
+    <Card className={cn("min-w-0 gap-3 py-4 transition-shadow hover:shadow-md", g.isDefault && "border-primary/40 ring-1 ring-primary/15")}>
       <CardHeader className="flex flex-row items-start gap-3 px-4">
         <div className={cn("flex size-10 shrink-0 items-center justify-center rounded-xl", g.isDefault ? "brand-gradient text-white" : "bg-muted text-muted-foreground")}><Server className="size-5" /></div>
         <div className="min-w-0 flex-1">
@@ -55,25 +55,25 @@ function GroupCard({ g }: { g: GroupView }) {
         </DropdownMenu>
       </CardHeader>
       <CardContent className="space-y-2.5 px-4 text-xs">
-        <div className="grid grid-cols-[64px_1fr] gap-x-2 gap-y-1.5">
+        <div className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-2 gap-y-1.5">
           <span className="text-muted-foreground">baseUrl</span><span className="truncate font-mono" title={g.baseUrl}>{g.baseUrl}{g.appendV1 && <Badge variant="outline" className="ml-1.5 h-4 px-1 text-[9px]">+v1</Badge>}</span>
-          <span className="text-muted-foreground">模型</span><span className="font-mono">{g.model}</span>
+          <span className="text-muted-foreground">模型</span><span className="truncate font-mono" title={g.model}>{g.model}</span>
           <span className="text-muted-foreground">API Key</span>
-          <span className="flex items-center gap-1.5">
+          <span className="flex min-w-0 flex-wrap items-center gap-x-1.5">
             {g.keyOk ? <CheckCircle2 className="size-3.5 text-emerald-500" /> : <XCircle className="size-3.5 text-destructive" />}
             <span className="font-mono">{g.keyOk ? g.keyMask : ""}</span>
             <span className="text-muted-foreground">{SRC_CN[g.keySource]}{g.keyEnv ? ` ${g.keyEnv}` : ""}</span>
           </span>
         </div>
-        {!g.keyOk && g.keyError && <div className="rounded-md bg-destructive/5 px-2 py-1.5 text-destructive">{g.keyError}</div>}
+        {!g.keyOk && g.keyError && <div className="break-words rounded-md bg-destructive/5 px-2 py-1.5 text-destructive">{g.keyError}</div>}
         <div className="space-y-0.5 rounded-md bg-muted/50 px-2.5 py-2 font-mono text-[10.5px] text-muted-foreground">
           <div className="truncate" title={g.generationsUrl}>POST {g.generationsUrl}</div>
           <div className="truncate" title={g.editsUrl}>POST {g.editsUrl}</div>
         </div>
         <div className="space-y-1.5 rounded-md border px-2.5 py-2">
-          <div className="flex items-center gap-2">
-            <span className="font-medium">模型列表</span>
-            {mc && !mc.stale && mc.fetchedAt > 0 && <Badge variant="outline" className="h-4 px-1 text-[10px]">{mc.models.length} / {mc.total}</Badge>}
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="shrink-0 font-medium">模型列表</span>
+            {mc && !mc.stale && mc.fetchedAt > 0 && <Badge variant="outline" className="h-4 px-1 text-[10px]" title="名称含 image 的模型数 / 接口返回的不同模型数（已去重）">{mc.models.length} / {mc.total}</Badge>}
             <span className="ml-auto" />
             {mc && !mc.stale && mc.models.length > 0 && <Button size="sm" variant="ghost" className="h-6 px-2" onClick={() => setShowModels((v) => !v)}>{showModels ? "收起" : "查看"}</Button>}
             <Button size="sm" variant="outline" className="h-6 px-2" disabled={mLoading || !g.keyOk} onClick={() => refreshModels(g.name)}>
@@ -82,7 +82,7 @@ function GroupCard({ g }: { g: GroupView }) {
           </div>
           <div className={cn("text-[10.5px] leading-snug", mst.tone === "error" ? "text-destructive" : mst.tone === "warn" ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground")}>{mst.text}</div>
           {showModels && mc && !mc.stale && (
-            <div className="flex flex-wrap gap-1">{mc.models.map((m) => <span key={m} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10.5px]">{m}</span>)}</div>
+            <div className="flex flex-wrap gap-1">{mc.models.map((m) => <span key={m} className="max-w-full truncate rounded bg-muted px-1.5 py-0.5 font-mono text-[10.5px]" title={m}>{m}</span>)}</div>
           )}
           <div className="text-[10px] text-muted-foreground">按名称匹配（含 image）自动保存，非能力检测；不会改动默认模型</div>
         </div>
@@ -96,7 +96,7 @@ function GroupCard({ g }: { g: GroupView }) {
             </span>
           )}
         </div>
-        {probe?.ok && <div className="text-[11px] text-muted-foreground">{probe.message}</div>}
+        {probe?.ok && <div className="break-words text-[11px] text-muted-foreground">{probe.message}</div>}
       </CardContent>
       <AlertDialog open={del} onOpenChange={setDel}>
         <AlertDialogContent>
@@ -147,17 +147,17 @@ export default function Groups() {
             : <Button variant="outline" onClick={() => doImport({})}><Download />从 Codex 配置导入</Button>}
         </Empty>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2">{groups.map((g) => <GroupCard key={g.name} g={g} />)}</div>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{groups.map((g) => <GroupCard key={g.name} g={g} />)}</div>
       )}
 
-      <Card className="mt-6">
+      <Card className="mt-6 min-w-0">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm"><FileJson className="size-4 text-primary" />导入 / 导出（兼容 openai-image-api 技能）</CardTitle>
           <CardDescription>格式与 <code className="font-mono">image-api-groups.json</code> 相同，支持 api_key、api_key_env、api_key_ref 三种密钥方式。导出文件以 0600 权限写入。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {!mobile && (
-            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
               <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder={codex} className="font-mono text-xs" />
               {isDesktopApp() && <Button variant="outline" onClick={async () => { const p = await pickJsonFile("选择配置文件"); if (p) setPath(p); }}>浏览…</Button>}
             </div>
@@ -179,8 +179,8 @@ export default function Groups() {
               await navigator.clipboard.writeText(JSON.stringify(r, null, 2));
             }, "已复制配置 JSON")}><Copy />复制 JSON</Button>
           </div>
-          <p className="text-xs text-muted-foreground">{mobile ? "移动端可选择 JSON 文件或粘贴内容导入；导出请使用「复制 JSON」后粘贴保存。" : <>路径留空时默认使用 <code className="font-mono">{codex}</code>。</>}{includeKeys && <span className="text-amber-600 dark:text-amber-400"> 注意：导出内容将包含明文密钥，请妥善保管。</span>}</p>
-          {status?.configPath && <p className="text-xs text-muted-foreground">本机配置文件：<code className="font-mono">{status.configPath}</code></p>}
+          <p className="text-xs text-muted-foreground">{mobile ? "移动端可选择 JSON 文件或粘贴内容导入；导出请使用「复制 JSON」后粘贴保存。" : <>路径留空时默认使用 <code className="font-mono break-all">{codex}</code>。</>}{includeKeys && <span className="text-amber-600 dark:text-amber-400"> 注意：导出内容将包含明文密钥，请妥善保管。</span>}</p>
+          {status?.configPath && <p className="text-xs text-muted-foreground">本机配置文件：<code className="font-mono break-all">{status.configPath}</code></p>}
         </CardContent>
       </Card>
 

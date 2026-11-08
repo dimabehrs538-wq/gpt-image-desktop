@@ -86,7 +86,7 @@ export function GroupDialog() {
           <DialogDescription>填写 OpenAI 兼容接口的 baseUrl 与 apiKey。密钥仅保存在本机配置文件（权限 0600），界面只显示脱敏掩码。</DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="显示名称">
             <Input value={f.displayName} placeholder="例如：OpenAI 官方 / 中转站 A" onChange={(e) => {
               const v = e.target.value; set("displayName", v);
@@ -149,14 +149,14 @@ export function GroupDialog() {
             <Input value={f.apiKeyEnv} className="mt-1 font-mono text-xs" placeholder="OPENAI_API_KEY" onChange={(e) => set("apiKeyEnv", e.target.value)} />
           )}
           {f.keySource === "ref" && (
-            <div className="grid gap-2 pt-1 sm:grid-cols-[1fr_200px]">
+            <div className="grid grid-cols-1 gap-2 pt-1 sm:grid-cols-[minmax(0,1fr)_200px]">
               <Input value={f.apiKeyRef?.path ?? ""} className="font-mono text-xs" placeholder="~/.secrets/openai.json" onChange={(e) => set("apiKeyRef", { path: e.target.value, field: f.apiKeyRef?.field ?? "" })} />
               <Input value={f.apiKeyRef?.field ?? ""} className="font-mono text-xs" placeholder="字段，如 providers.openai.key" onChange={(e) => set("apiKeyRef", { path: f.apiKeyRef?.path ?? "", field: e.target.value })} />
             </div>
           )}
         </Field>
 
-        <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
           <Field label="备注（可选）"><Input value={f.note} placeholder="例如：按量计费 / 公司网关" onChange={(e) => set("note", e.target.value)} /></Field>
           <label className="flex h-9 items-center gap-2 text-sm"><Switch checked={f.makeDefault} onCheckedChange={(v) => set("makeDefault", v)} />设为默认分组</label>
         </div>

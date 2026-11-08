@@ -34,7 +34,9 @@ export interface Job {
 export interface ProbeResult { ok: boolean; status: number; latencyMs: number; message: string; url: string; modelCount: number; modelListed: boolean }
 /** 分组模型列表缓存（内核 GET /api/models、POST /api/groups/{name}/models 返回；不含任何密钥） */
 export interface ModelCache {
-  group: string; models: string[]; total: number; fetchedAt: number; effectiveBaseUrl: string;
+  group: string; models: string[];
+  /** 接口返回的不同模型 ID 数（去重后），不是原始 data 数组长度 */
+  total: number; fetchedAt: number; effectiveBaseUrl: string;
   /** 分组的 baseUrl 或密钥已变化：旧列表不再返回，需要重新拉取 */
   stale: boolean; error: string; errorStatus: number; errorAt: number; filter: string;
 }

@@ -41,7 +41,8 @@ export function ModelCombobox({ value, onChange, placeholder, cache, loading, on
     if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setActive((i) => Math.min(items.length - 1, i + 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setActive((i) => Math.max(-1, i - 1)); }
     else if (e.key === "Enter" && open && active >= 0 && items[active]) { e.preventDefault(); pick(items[active]); }
-    else if (e.key === "Escape") setOpen(false);
+    else if (e.key === "Escape") { if (open) e.stopPropagation(); setOpen(false); }
+    else if (e.key === "Tab") setOpen(false);
   };
   const row = (m: string, i: number, hint?: string) => (
     <li key={`${i}-${m}`} id={`${listId}-${i}`} role="option" aria-selected={m === value}
@@ -60,7 +61,9 @@ export function ModelCombobox({ value, onChange, placeholder, cache, loading, on
           <Input ref={input} value={value} role="combobox" aria-expanded={open} aria-controls={listId} aria-autocomplete="list"
             aria-activedescendant={active >= 0 ? `${listId}-${active}` : undefined}
             className="pr-8 font-mono text-xs" placeholder={placeholder} autoComplete="off" spellCheck={false}
-            onFocus={() => setOpen(true)} onChange={(e) => { onChange(e.target.value); setOpen(true); }} onKeyDown={onKey} />
+            onFocus={() => setOpen(true)}
+            onBlur={(e) => { if (!box.current?.contains(e.relatedTarget as Node | null)) setOpen(false); }}
+            onChange={(e) => { onChange(e.target.value); setOpen(true); }} onKeyDown={onKey} />
           <button type="button" aria-label="展开模型列表" tabIndex={-1}
             className="absolute inset-y-0 right-0 flex w-8 items-center justify-center text-muted-foreground hover:text-foreground"
             onPointerDown={(e) => e.preventDefault()} onClick={() => { setOpen((o) => !o); input.current?.focus(); }}>
@@ -77,7 +80,7 @@ export function ModelCombobox({ value, onChange, placeholder, cache, loading, on
           </Tip>
         )}
         {open && (
-          <ul id={listId} role="listbox" className="absolute top-full left-0 z-50 mt-1 max-h-64 w-full overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
+          <ul id={listId} role="listbox" className="absolute top-full left-0 z-50 mt-1 max-h-[min(16rem,40dvh)] w-full overflow-y-auto overscroll-contain rounded-md border bg-popover p-1 text-popover-foreground shadow-lg">
             {sug.fetched.length > 0 && <li className="px-2 pt-1 pb-0.5 text-[10px] font-medium text-muted-foreground">接口返回（名称含 image）</li>}
             {sug.fetched.map((m, i) => row(m, i))}
             {sug.presets.length > 0 && <li className="px-2 pt-1.5 pb-0.5 text-[10px] font-medium text-muted-foreground">内置预设（未经接口确认）</li>}

@@ -352,20 +352,25 @@ func (c *Client) Probe(ctx context.Context, ep *config.Endpoint) ProbeResult {
 	}
 	if json.Unmarshal(raw, &ml) == nil && ml.Data != nil {
 		r.ModelsReturned = true
-		r.ModelCount = len(ml.Data)
+		// 与模型列表缓存的 total 语义一致：统计不同的非空模型 ID（重复 ID 只计一次）
+		seen := map[string]bool{}
 		for _, m := range ml.Data {
+			if m.ID != "" && !seen[m.ID] {
+				seen[m.ID] = true
+			}
 			if m.ID == ep.Model {
 				r.ModelListed = true
 			}
 		}
+		r.ModelCount = len(seen)
 	}
 	switch {
 	case !r.ModelsReturned:
 		r.Message = "连接成功（接口未返回模型列表）"
 	case r.ModelListed:
-		r.Message = fmt.Sprintf("连接成功，模型 %s 可用（共 %d 个模型）", ep.Model, r.ModelCount)
+		r.Message = fmt.Sprintf("连接成功，模型 %s 可用（共 %d 个不同模型）", ep.Model, r.ModelCount)
 	default:
-		r.Message = fmt.Sprintf("连接成功，共 %d 个模型，但列表中未找到 %s（部分中转站不列出生图模型，可直接尝试）", r.ModelCount, ep.Model)
+		r.Message = fmt.Sprintf("连接成功，共 %d 个不同模型，但列表中未找到 %s（部分中转站不列出生图模型，可直接尝试）", r.ModelCount, ep.Model)
 	}
 	return r
 }

@@ -6,7 +6,7 @@
 - 鉴权：Authorization: Bearer <key>，错误时返回 OpenAI 风格错误体
 - model 为 "url-model" 时返回 url 字段（测试下载落盘），其余返回 b64_json
 """
-import argparse, base64, json, re, struct, zlib
+import argparse, base64, json, re, struct, time, zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -22,6 +22,7 @@ COLORS = [(124, 58, 237), (14, 165, 233), (236, 72, 153), (34, 197, 94)]
 
 class H(BaseHTTPRequestHandler):
     key = ""
+    flaky_fail = False
     stats = {"generations": 0, "edits": 0, "last_edit_images": 0}
 
     def log_message(self, fmt, *a):
@@ -46,6 +47,10 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, png(96, 64, COLORS[3]), "image/png")
         if self.path == "/__stats":
             return self.send(200, self.stats)
+        if self.path.startswith("/__flaky"):
+            # UI 联调：/__flaky?fail=1 让 flaky 分组的 /models 返回 500，fail=0 恢复
+            H.flaky_fail = "fail=1" in self.path
+            return self.send(200, {"flaky_fail": H.flaky_fail})
         if not self.authed():
             return
         m = re.fullmatch(r"(?:/(\w+))?/v1/models", self.path)
@@ -58,6 +63,13 @@ class H(BaseHTTPRequestHandler):
                 "noimg": ("gpt-4o", "o3"),
                 "empty": (),
             }
+            if variant == "slow":
+                time.sleep(25)
+                ids["slow"] = ("slow-image-1",)
+            if variant == "flaky":
+                if H.flaky_fail:
+                    return self.send(500, {"error": {"message": "upstream temporarily unavailable"}})
+                ids["flaky"] = ("flaky-image-a", "flaky-image-b", "chat-model")
             if variant in ids:
                 return self.send(200, {"object": "list", "data": [{"id": x, "object": "model"} for x in ids[variant]]})
             if variant == "malformed":
@@ -82,6 +94,8 @@ class H(BaseHTTPRequestHandler):
         if not self.authed():
             return
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        # 允许 /{variant}/v1/... 前缀，便于多分组联调时各组都能生图
+        self.path = re.sub(r"^/\w+(?=/v1/)", "", self.path)
         if self.path == "/v1/images/generations":
             req = json.loads(body or b"{}")
             if not req.get("prompt"):

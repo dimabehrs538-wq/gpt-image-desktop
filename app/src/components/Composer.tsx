@@ -64,7 +64,7 @@ export function Composer({ mode }: { mode: "generate" | "edit" }) {
 
   return (
     // 移动端单列流式排布：提示词 → 参考图 → 参数 → 任务结果（通过 display: contents + order 重排）
-    <div className="grid gap-4 md:gap-5 lg:grid-cols-[320px_1fr]">
+    <div className="grid grid-cols-1 gap-4 md:gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
       <div className="space-y-4 max-lg:contents lg:sticky lg:top-0 lg:self-start">
         {mode === "edit" && <div className="max-lg:order-2"><RefImages images={images} onChange={setImages} mask={mask} onMask={setMask} /></div>}
         <div className="max-lg:order-3"><ParamsPanel value={params} onChange={setParams} /></div>

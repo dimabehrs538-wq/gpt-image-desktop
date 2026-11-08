@@ -66,8 +66,8 @@ export function cacheStatus(c: ModelCache | undefined, loading: boolean, now = D
   }
   if (!ok) return { tone: "muted", text: "尚未拉取模型列表，可直接输入模型名" };
   if (c.total === 0) return { tone: "warn", text: `接口返回空列表（${relTime(c.fetchedAt, now)}），可直接输入模型名` };
-  if (c.models.length === 0) return { tone: "warn", text: `共 ${c.total} 个模型，名称都不含 image（${relTime(c.fetchedAt, now)}），可直接输入` };
-  return { tone: "ok", text: `${c.models.length} 个 image 模型（共 ${c.total} 个）· ${relTime(c.fetchedAt, now)}` };
+  if (c.models.length === 0) return { tone: "warn", text: `接口共 ${c.total} 个不同模型，名称都不含 image（${relTime(c.fetchedAt, now)}），可直接输入` };
+  return { tone: "ok", text: `${c.models.length} 个 image 模型（接口共 ${c.total} 个不同模型）· ${relTime(c.fetchedAt, now)}` };
 }
 
 /** 判断当前选中的模型是否在已拉取的列表中（仅用于提示，绝不自动替换）。 */

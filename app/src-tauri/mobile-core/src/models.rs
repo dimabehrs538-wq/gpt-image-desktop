@@ -27,6 +27,7 @@ pub struct Entry {
     pub fingerprint: String,
     pub effective_base_url: String,
     pub models: Vec<String>,
+    /// 接口返回的不同模型 ID 数（空 id 忽略、重复 id 去重后计数），不是原始 data 数组长度
     pub total: usize,
     pub fetched_at: i64,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -163,9 +164,9 @@ fn summary(e: &Entry) -> String {
     if e.total == 0 {
         "接口返回的模型列表为空，可直接手动输入模型名".into()
     } else if e.models.is_empty() {
-        format!("接口返回 {} 个模型，但名称都不含 image，可直接手动输入模型名", e.total)
+        format!("接口返回 {} 个不同模型（已去重），但名称都不含 image，可直接手动输入模型名", e.total)
     } else {
-        format!("已拉取 {} 个模型，其中 {} 个名称包含 image", e.total, e.models.len())
+        format!("接口返回 {} 个不同模型（已去重），其中 {} 个名称包含 image", e.total, e.models.len())
     }
 }
 

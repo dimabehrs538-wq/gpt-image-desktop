@@ -41,13 +41,14 @@ perm=$(stat -c %a "$TMP/home/groups.json"); [ "$perm" = 600 ] && ok "groups.json
 curl "${A[@]}" -X POST "$U/api/groups" -d "{\"name\":\"badkey\",\"baseUrl\":\"http://127.0.0.1:$MOCK_PORT/v1\",\"model\":\"gpt-image-2\",\"apiKey\":\"sk-wrong-key-00001111\"}" > /dev/null
 
 step "测试连接"
-r=$(curl "${A[@]}" -X POST "$U/api/groups/mock/test"); [ "$(echo "$r" | j 'd["ok"]')" = True ] && ok "$(echo "$r" | j 'd["message"]') · $(echo "$r" | j 'd["latencyMs"]') ms" || fail "$r"
+r=$(curl "${A[@]}" -X POST "$U/api/groups/mock/test"); [ "$(echo "$r" | j 'd["ok"]')" = True ] && [ "$(echo "$r" | j 'd["modelCount"]')" = 6 ] && ok "$(echo "$r" | j 'd["message"]') · $(echo "$r" | j 'd["latencyMs"]') ms" || fail "$r"
 r=$(curl "${A[@]}" -X POST "$U/api/groups/badkey/test"); echo "$r" | grep -q "sk-wrong-key-00001111" && fail "错误信息泄露密钥"
 ok "错误密钥：$(echo "$r" | j 'd["message"]')"
 
 step "拉取模型列表（GET /models，名称含 image 的自动保存，按分组隔离）"
 r=$(curl "${A[@]}" -X POST "$U/api/groups/mock/models")
-[ "$(echo "$r" | j 'd["cache"]["models"]')" = "['gpt-image-1', 'GPT-Image-1-Mini', 'gpt-image-2']" ] && ok "$(echo "$r" | j 'd["message"]')：$(echo "$r" | j '", ".join(d["cache"]["models"])')" || fail "$r"
+# mock 原始 data 7 条（gpt-image-1 重复一次）：total 语义为去重后的不同模型数 = 6
+[ "$(echo "$r" | j 'd["cache"]["models"]')" = "['gpt-image-1', 'GPT-Image-1-Mini', 'gpt-image-2']" ] && [ "$(echo "$r" | j 'd["cache"]["total"]')" = 6 ] && ok "$(echo "$r" | j 'd["message"]')：$(echo "$r" | j '", ".join(d["cache"]["models"])')" || fail "$r"
 curl "${A[@]}" -X POST "$U/api/groups" -d "{\"name\":\"alt\",\"baseUrl\":\"http://127.0.0.1:$MOCK_PORT/alt\",\"appendV1\":true,\"model\":\"flux-image-pro\",\"apiKey\":\"$KEY\"}" > /dev/null
 r=$(curl "${A[@]}" -X POST "$U/api/groups/alt/models"); [ "$(echo "$r" | j 'd["cache"]["models"]')" = "['flux-image-pro', 'seedream-image-3']" ] && ok "另一分组独立列表：$(echo "$r" | j '", ".join(d["cache"]["models"])')" || fail "$r"
 r=$(curl "${A[@]}" -X POST "$U/api/groups/badkey/models"); echo "$r" | grep -q "sk-wrong-key-00001111" && fail "拉取失败信息泄露密钥"

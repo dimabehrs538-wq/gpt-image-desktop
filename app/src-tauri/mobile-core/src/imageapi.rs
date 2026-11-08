@@ -306,16 +306,22 @@ impl Client {
         if let Ok(Value::Object(m)) = serde_json::from_slice::<Value>(&raw) {
             if let Some(Value::Array(list)) = m.get("data") {
                 r.models_returned = true;
-                r.model_count = list.len();
+                // 与模型列表缓存的 total 语义一致：统计不同的非空模型 ID（重复 ID 只计一次）
+                r.model_count = list
+                    .iter()
+                    .filter_map(|x| x.get("id").and_then(Value::as_str))
+                    .filter(|id| !id.is_empty())
+                    .collect::<std::collections::HashSet<_>>()
+                    .len();
                 r.model_listed = list.iter().any(|x| x.get("id").and_then(Value::as_str) == Some(ep.model.as_str()));
             }
         }
         r.message = if !r.models_returned {
             "连接成功（接口未返回模型列表）".into()
         } else if r.model_listed {
-            format!("连接成功，模型 {} 可用（共 {} 个模型）", ep.model, r.model_count)
+            format!("连接成功，模型 {} 可用（共 {} 个不同模型）", ep.model, r.model_count)
         } else {
-            format!("连接成功，共 {} 个模型，但列表中未找到 {}（部分中转站不列出生图模型，可直接尝试）", r.model_count, ep.model)
+            format!("连接成功，共 {} 个不同模型，但列表中未找到 {}（部分中转站不列出生图模型，可直接尝试）", r.model_count, ep.model)
         };
         r
     }
