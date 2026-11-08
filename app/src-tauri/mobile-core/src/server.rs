@@ -33,7 +33,7 @@ use crate::models;
 use crate::store::{Item, Query as HQuery, SettingsPatch};
 use crate::util::{new_id, now_ms};
 
-pub const VERSION: &str = "0.1.1";
+pub const VERSION: &str = "0.1.2";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -29,7 +29,7 @@ import (
 )
 
 // Version 内核版本。
-var Version = "0.1.1"
+var Version = "0.1.2"
 
 // Job 异步生图任务。
 type Job struct {
