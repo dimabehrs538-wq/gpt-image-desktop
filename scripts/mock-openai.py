@@ -5,6 +5,9 @@
 接口：GET /v1/models（/<变体>/v1/models：alt 另一组模型、noimg 无 image 模型、empty 空列表、malformed 非标准、html 非 JSON、其它 404）、POST /v1/images/generations、POST /v1/images/edits、GET /files/<name>.png
 - 鉴权：Authorization: Bearer <key>，错误时返回 OpenAI 风格错误体
 - model 为 "url-model" 时返回 url 字段（测试下载落盘），其余返回 b64_json
+- 生图张数变体（POST /<变体>/v1/images/...）：cap1 / cap2 不论 n 最多返回 1 / 2 张（模拟忽略 n 的中转站）；
+  badone 第 2 张 b64 损坏；slow 每次请求延迟 1.5 s 且最多 1 张（测试补图途中取消）；failnext 首次正常（最多 1 张）之后返回 500；
+  zero 返回空 data。GET /__stats 的 calls 记录每次请求的 路径 / n
 """
 import argparse, base64, json, re, struct, time, zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,7 +26,8 @@ COLORS = [(124, 58, 237), (14, 165, 233), (236, 72, 153), (34, 197, 94)]
 class H(BaseHTTPRequestHandler):
     key = ""
     flaky_fail = False
-    stats = {"generations": 0, "edits": 0, "last_edit_images": 0}
+    stats = {"generations": 0, "edits": 0, "last_edit_images": 0, "calls": []}
+    failnext_seen = 0
 
     def log_message(self, fmt, *a):
         print("[mock]", fmt % a, flush=True)
@@ -47,6 +51,10 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, png(96, 64, COLORS[3]), "image/png")
         if self.path == "/__stats":
             return self.send(200, self.stats)
+        if self.path == "/__reset":
+            H.stats["calls"] = []
+            H.failnext_seen = 0
+            return self.send(200, {"ok": True})
         if self.path.startswith("/__flaky"):
             # UI 联调：/__flaky?fail=1 让 flaky 分组的 /models 返回 500，fail=0 恢复
             H.flaky_fail = "fail=1" in self.path
@@ -80,6 +88,15 @@ class H(BaseHTTPRequestHandler):
         self.send(404, {"error": {"message": "not found"}})
 
     def images(self, n, model, size, edit):
+        cap = {"cap1": 1, "cap2": 2, "failnext": 1, "slow": 1}.get(getattr(self, "variant", ""))
+        if cap is not None:
+            n = min(n, cap)
+        out = self._images(n, model, size, edit)
+        if getattr(self, "variant", "") == "badone" and len(out["data"]) > 1:
+            out["data"][1] = {"b64_json": "@@not-base64@@"}
+        return out
+
+    def _images(self, n, model, size, edit):
         w, h = (int(x) for x in size.split("x")) if re.fullmatch(r"\d+x\d+", size or "") else (64, 64)
         w, h = max(8, w // 16), max(8, h // 16)
         data = []
@@ -95,7 +112,29 @@ class H(BaseHTTPRequestHandler):
             return
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         # 允许 /{variant}/v1/... 前缀，便于多分组联调时各组都能生图
+        vm = re.match(r"^/(\w+)(?=/v1/)", self.path)
+        variant = vm.group(1) if vm else ""
         self.path = re.sub(r"^/\w+(?=/v1/)", "", self.path)
+        if self.path in ("/v1/images/generations", "/v1/images/edits"):
+            nreq = None
+            if self.path.endswith("generations"):
+                try:
+                    nreq = json.loads(body or b"{}").get("n")
+                except Exception:
+                    pass
+            else:
+                m_ = re.search(r'name="n"\r\n\r\n(\d+)', body.decode("latin-1"))
+                nreq = int(m_.group(1)) if m_ else None
+            H.stats["calls"].append({"variant": variant, "path": self.path, "n": nreq})
+            if variant == "slow":
+                time.sleep(1.5)
+            if variant == "failnext":
+                H.failnext_seen += 1
+                if H.failnext_seen > 1:
+                    return self.send(500, {"error": {"message": "upstream overloaded, try later", "code": "server_error"}})
+            if variant == "zero":
+                return self.send(200, {"created": 0, "data": []})
+        self.variant = variant
         if self.path == "/v1/images/generations":
             req = json.loads(body or b"{}")
             if not req.get("prompt"):

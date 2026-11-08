@@ -55,6 +55,23 @@ pub struct Job {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub error: String,
     pub items: Vec<Item>,
+    /// 期望 / 接口返回 / 已保存 / 失败 张数与请求次数（见 engine::Outcome），notes 为给用户的说明
+    pub requested: i64,
+    pub received: i64,
+    pub saved: i64,
+    pub failed: i64,
+    pub requests: i64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+fn apply_outcome(j: &mut Job, o: &crate::engine::Outcome) {
+    j.items = o.items.clone();
+    j.received = o.received;
+    j.saved = o.saved;
+    j.failed = o.failed;
+    j.requests = o.requests;
+    j.notes = o.notes.clone();
 }
 
 fn is_zero(n: &i64) -> bool {
@@ -191,6 +208,12 @@ impl Server {
             elapsed_ms: 0,
             error: String::new(),
             items: vec![],
+            requested: p.req.n,
+            received: 0,
+            saved: 0,
+            failed: 0,
+            requests: 0,
+            notes: vec![],
         };
         let id = job.id.clone();
         let snap = {
@@ -203,43 +226,58 @@ impl Server {
         self.publish("job", serde_json::to_value(&snap).unwrap());
         let s = self.clone();
         tokio::spawn(async move {
-            let res = tokio::select! {
+            let permit = tokio::select! {
                 _ = cancel.cancelled() => None,
-                r = async {
-                    let _permit = s.sem.acquire().await;
-                    s.engine.run(&id, &p).await
-                } => Some(r),
+                p = s.sem.acquire() => Some(p),
             };
+            let o = match permit {
+                None => crate::engine::Outcome { requested: p.req.n, canceled: true, notes: vec!["已取消，保留已生成的 0 张".into()], ..Default::default() },
+                Some(_permit) => {
+                    let s2 = s.clone();
+                    let id2 = id.clone();
+                    s.engine
+                        .execute(&id, &p, &cancel, move |o| {
+                            // 逐张保存后推送进度：界面先显示已完成的图片，取消 / 失败时也保留
+                            let snap = {
+                                let mut jobs = s2.jobs.lock().unwrap();
+                                let Some(e) = jobs.get_mut(&id2) else { return };
+                                apply_outcome(&mut e.job, o);
+                                Self::snapshot(e)
+                            };
+                            s2.publish("job", serde_json::to_value(&snap).unwrap());
+                        })
+                        .await
+                }
+            };
+            let status = o.status();
             let snap = {
                 let mut jobs = s.jobs.lock().unwrap();
                 let Some(e) = jobs.get_mut(&id) else { return };
                 let j = &mut e.job;
                 j.finished_at = now_ms();
                 j.elapsed_ms = j.finished_at - j.created_at;
-                match &res {
-                    None => {
-                        j.status = "canceled".into();
-                        j.error = "已取消".into();
-                    }
-                    Some(Err(msg)) => {
-                        j.status = "failed".into();
-                        j.error = msg.clone();
-                    }
-                    Some(Ok(items)) => {
-                        j.status = "succeeded".into();
-                        j.items = items.clone();
-                    }
-                }
+                apply_outcome(j, &o);
+                j.status = status.into();
+                j.error = match status {
+                    "canceled" => "已取消".into(),
+                    "succeeded" => String::new(),
+                    _ => o.summary(),
+                };
                 Self::snapshot(e)
             };
             cancel.cancel();
-            match &res {
-                Some(Ok(items)) => s.log.log(&format!("任务 {} 完成（{}ms），保存 {} 张", id, snap.elapsed_ms, items.len())),
-                _ => s.log.log(&format!("任务 {} 失败（{}ms）：{}", id, snap.elapsed_ms, snap.error)),
+            if status == "succeeded" {
+                let suffix = if o.notes.is_empty() { String::new() } else { format!("（{}）", o.notes.join("；")) };
+                s.log.log(&format!("任务 {} 完成（{}ms），期望 {} 张，保存 {} 张，请求 {} 次{}", id, snap.elapsed_ms, snap.requested, snap.saved, snap.requests, suffix));
+            } else {
+                s.log.log(&format!(
+                    "任务 {} {}（{}ms）：期望 {} 张，接口返回 {} 张，保存 {} 张，失败 {} 张，请求 {} 次：{}",
+                    id, status, snap.elapsed_ms, snap.requested, snap.received, snap.saved, snap.failed, snap.requests, snap.error
+                ));
             }
             s.publish("job", serde_json::to_value(&snap).unwrap());
-            if !snap.items.is_empty() {
-                s.publish("history", json!({ "added": snap.items.len() }));
+            if o.saved > 0 {
+                s.publish("history", json!({ "added": o.saved }));
             }
         });
         snap

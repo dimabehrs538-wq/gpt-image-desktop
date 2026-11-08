@@ -18,7 +18,13 @@ pub struct Settings {
     pub request_timeout_sec: i64,
     #[serde(deserialize_with = "null_default")]
     pub filename_prefix: String,
+    /// 接口返回张数少于请求时：fill（默认）逐张补请求，最多补到请求张数；report 只如实报告不补
+    #[serde(deserialize_with = "null_default")]
+    pub missing_policy: String,
 }
+
+pub const MISSING_FILL: &str = "fill";
+pub const MISSING_REPORT: &str = "report";
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -26,6 +32,7 @@ pub struct SettingsPatch {
     pub output_dir: Option<String>,
     pub request_timeout_sec: Option<i64>,
     pub filename_prefix: Option<String>,
+    pub missing_policy: Option<String>,
 }
 
 fn is_zero_u(n: &u32) -> bool {
@@ -106,6 +113,9 @@ impl Store {
         if st.request_timeout_sec <= 0 {
             st.request_timeout_sec = 600;
         }
+        if st.missing_policy != MISSING_REPORT {
+            st.missing_policy = MISSING_FILL.into();
+        }
         st
     }
 
@@ -136,6 +146,12 @@ impl Store {
         }
         if let Some(fp) = p.filename_prefix {
             st.filename_prefix = fp.trim().into();
+        }
+        if let Some(mp) = p.missing_policy {
+            if mp != MISSING_FILL && mp != MISSING_REPORT {
+                return Err("张数不足处理方式只能是 fill 或 report".into());
+            }
+            st.missing_policy = mp;
         }
         write_json(&self.dir.join("settings.json"), &st)?;
         Ok(st)
@@ -234,6 +250,11 @@ mod tests {
         assert!(s.update_settings(SettingsPatch { output_dir: Some("rel".into()), ..Default::default() }).is_err());
         let st = s.update_settings(SettingsPatch { filename_prefix: Some(" p ".into()), ..Default::default() }).unwrap();
         assert_eq!(st.filename_prefix, "p");
+        assert_eq!(st.missing_policy, MISSING_FILL);
+        assert!(s.update_settings(SettingsPatch { missing_policy: Some("forever".into()), ..Default::default() }).is_err());
+        let st = s.update_settings(SettingsPatch { missing_policy: Some(MISSING_REPORT.into()), ..Default::default() }).unwrap();
+        assert_eq!(st.missing_policy, MISSING_REPORT);
+        assert_eq!(s.settings().missing_policy, MISSING_REPORT);
         let mk = |id: &str, t: i64, i: i64, mode: &str, prompt: &str| Item {
             id: id.into(),
             created_at: t,

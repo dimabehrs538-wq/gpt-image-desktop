@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { api, eventSourceURL, getCore, notify, setTray, type GenParams, type GroupsResp, type GroupView, type ImageInput, type Job, type ModelCache, type ModelRefreshResult, type ModelsResp, type Settings, type Status } from "./api";
+import { api, countLine, eventSourceURL, getCore, jobCounts, notify, setTray, type GenParams, type GroupsResp, type GroupView, type ImageInput, type Job, type ModelCache, type ModelRefreshResult, type ModelsResp, type Settings, type Status } from "./api";
 import { autoKey, needsAutoFetch } from "./models";
 
 export type Page = "create" | "edit" | "gallery" | "groups" | "settings";
@@ -118,9 +118,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
             if (j.status !== "running" && !seenDone.current.has(j.id)) {
               seenDone.current.add(j.id);
               const what = j.mode === "edit" ? "图生图" : "文生图";
+              const c = jobCounts(j);
               if (j.status === "succeeded") {
-                toast.success(`${what}完成`, { description: `已保存 ${j.items.length} 张图片` });
-                notify("GPT 生图完成", `${what} · ${j.items.length} 张 · ${(j.elapsedMs / 1000).toFixed(1)} 秒`);
+                toast.success(`${what}完成`, { description: [`已保存 ${c.saved} 张图片`, ...c.notes].join("；") });
+                notify("GPT 生图完成", `${what} · ${c.saved} 张 · ${(j.elapsedMs / 1000).toFixed(1)} 秒`);
+              } else if (j.status === "partial") {
+                // 张数不足不算完整成功：明确提示期望 / 实际张数与原因
+                toast.warning(`${what}只完成了一部分`, { description: `${countLine(j)}${j.error ? `：${j.error}` : ""}`, duration: 12000 });
+                notify("GPT 生图部分完成", `${what} · ${countLine(j)}`);
               } else if (j.status === "failed") {
                 toast.error(`${what}失败`, { description: j.error, duration: 10000 });
                 notify("GPT 生图失败", j.error ?? "");

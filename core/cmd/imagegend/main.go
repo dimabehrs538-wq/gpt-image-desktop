@@ -345,6 +345,9 @@ func generate(mode string, args []string) {
 	fmt.Fprintf(os.Stderr, "正在请求 %s（分组 %s，模型 %s）…\n", p.Endpoint.BaseURL, p.Req.Group, p.Req.Model)
 	items, err := e.engine.Run(context.Background(), engine.NewID(), p)
 	if err != nil {
+		if len(items) > 0 {
+			printJSON(items) // 已保存的部分结果照常输出，退出码仍为失败
+		}
 		fatal("%v", err)
 	}
 	printJSON(items)

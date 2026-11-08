@@ -64,6 +64,15 @@ func (e *APIError) Error() string {
 	return s + "：" + e.Message
 }
 
+// PartialError 接口返回的图片中有部分无法解码 / 下载：与已成功的图片一起返回，调用方据此保留可用的结果。
+type PartialError struct {
+	Failures []string
+}
+
+func (e *PartialError) Error() string {
+	return fmt.Sprintf("%d 张图片无法使用：%s", len(e.Failures), strings.Join(e.Failures, "；"))
+}
+
 // Client 简单 HTTP 客户端。
 type Client struct {
 	HTTP *http.Client
@@ -217,6 +226,7 @@ func (c *Client) do(ctx context.Context, ep *config.Endpoint, req *http.Request)
 		return nil, &APIError{Status: resp.StatusCode, Message: "接口未返回任何图片（data 为空）"}
 	}
 	out := make([]Image, 0, len(ir.Data))
+	var failures []string
 	for i, d := range ir.Data {
 		var im Image
 		im.RevisedPrompt = d.RevisedPrompt
@@ -228,20 +238,30 @@ func (c *Client) do(ctx context.Context, ep *config.Endpoint, req *http.Request)
 			}
 			data, err := base64.StdEncoding.DecodeString(b64)
 			if err != nil {
-				return nil, fmt.Errorf("第 %d 张图片 b64_json 解码失败：%v", i+1, err)
+				failures = append(failures, fmt.Sprintf("第 %d 张图片 b64_json 解码失败：%v", i+1, err))
+				continue
 			}
 			im.Data = data
 		case d.URL != "":
 			data, err := c.download(ctx, d.URL)
 			if err != nil {
-				return nil, fmt.Errorf("第 %d 张图片下载失败：%s", i+1, config.Redact(err.Error(), ep.Key))
+				if ctx.Err() != nil {
+					return out, ctx.Err()
+				}
+				failures = append(failures, fmt.Sprintf("第 %d 张图片下载失败：%s", i+1, config.Redact(err.Error(), ep.Key)))
+				continue
 			}
 			im.Data, im.SourceURL = data, d.URL
 		default:
-			return nil, fmt.Errorf("第 %d 张图片既没有 b64_json 也没有 url", i+1)
+			failures = append(failures, fmt.Sprintf("第 %d 张图片既没有 b64_json 也没有 url", i+1))
+			continue
 		}
 		im.MIME = http.DetectContentType(im.Data)
 		out = append(out, im)
+	}
+	if len(failures) > 0 {
+		// 部分（或全部）条目不可用：可用的图片照常返回，调用方保存并如实统计失败张数
+		return out, &PartialError{Failures: failures}
 	}
 	return out, nil
 }

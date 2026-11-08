@@ -109,6 +109,63 @@ step "删除记录（同时删除文件）"
 ID=$(echo "$r" | j 'd["items"][0]["id"]'); P=$(echo "$r" | j 'd["items"][0]["path"]')
 curl "${A[@]}" -X DELETE "$U/api/history/$ID?deleteFile=1" > /dev/null; [ ! -e "$P" ] && ok "已删除 $(basename "$P")" || fail "文件仍存在"
 
+step "多张张数：接口少返回 / 部分失败 / 取消（期望、实际、失败、请求次数如实统计，保留部分成果）"
+for v in cap1 cap2 badone failnext zero slow; do
+  curl "${A[@]}" -X POST "$U/api/groups" -d "{\"name\":\"$v\",\"baseUrl\":\"http://127.0.0.1:$MOCK_PORT/$v\",\"appendV1\":true,\"model\":\"gpt-image-2\",\"apiKey\":\"$KEY\"}" > /dev/null
+done
+reset() { curl -s "http://127.0.0.1:$MOCK_PORT/__reset" > /dev/null; }
+ns() { curl -s "http://127.0.0.1:$MOCK_PORT/__stats" | j '[c["n"] for c in d["calls"]]'; }
+cnt() { echo "$1" | j '(d["status"], d["requested"], d["received"], d["saved"], d["failed"], d["requests"], len(d["items"]))'; }
+r=$(curl "${A[@]}" "$U/api/settings"); [ "$(echo "$r" | j 'd["missingPolicy"]')" = fill ] && ok "默认 missingPolicy=fill" || fail "$r"
+code=$(curl -s -o /dev/null -w '%{http_code}' "${A[@]}" -X PUT "$U/api/settings" -d '{"missingPolicy":"forever"}'); [ "$code" = 400 ] && ok "非法 missingPolicy 被拒绝（400）" || fail "期望 400，实际 $code"
+
+reset; job=$(curl "${A[@]}" -X POST "$U/api/generate" -d '{"prompt":"四张正常","n":4,"group":"mock"}' | j 'd["id"]'); s=$(wait_job "$job")
+[ "$(cnt "$s")" = "('succeeded', 4, 4, 4, 0, 1, 4)" ] && [ "$(ns)" = "[4]" ] && ok "支持 n 的接口：1 次请求 4/4 张" || fail "$s $(ns)"
+
+curl -sN -m 6 "$U/api/events?token=$TOKEN" > "$TMP/sse-count.txt" 2>/dev/null & SSE_PID=$!; sleep 0.3
+reset; job=$(curl "${A[@]}" -X POST "$U/api/generate" -d '{"prompt":"中转只回一张","n":4,"group":"cap1","name":"cap1"}' | j 'd["id"]'); s=$(wait_job "$job")
+[ "$(cnt "$s")" = "('succeeded', 4, 4, 4, 0, 4, 4)" ] && [ "$(ns)" = "[4, 1, 1, 1]" ] || fail "$s $(ns)"
+[ "$(echo "$s" | j 'sorted(i["path"].split("/")[-1] for i in d["items"]) == ["cap1-%d.png" % k for k in range(1,5)]')" = True ] || fail "文件名：$s"
+[ "$(echo "$s" | j 'sorted(i["index"] for i in d["items"])')" = "[0, 1, 2, 3]" ] || fail "index：$s"
+ok "只回 1 张的接口：逐张补请求（n=$(ns)），4/4 张，说明：$(echo "$s" | j '"；".join(d.get("notes", []))')"
+wait $SSE_PID 2>/dev/null || true
+python3 - "$TMP/sse-count.txt" "$job" <<'PY' && ok "SSE 逐张推送进度（saved 1→4）" || fail "SSE 进度：$(grep -c "$job" "$TMP/sse-count.txt")"
+import json, sys
+seen = []
+for line in open(sys.argv[1], encoding="utf-8"):
+    if line.startswith("data:"):
+        d = json.loads(line[5:])
+        if d.get("type") == "job" and d["data"]["id"] == sys.argv[2]:
+            seen.append(d["data"]["saved"])
+assert {1, 2, 3, 4} <= set(seen), seen
+PY
+
+reset; job=$(curl "${A[@]}" -X POST "$U/api/edit" -d "{\"prompt\":\"编辑中转只回两张\",\"n\":4,\"group\":\"cap2\",\"images\":[{\"path\":\"$UP\"}]}" | j 'd["id"]'); s=$(wait_job "$job")
+[ "$(cnt "$s")" = "('succeeded', 4, 4, 4, 0, 3, 4)" ] && [ "$(ns)" = "[4, 1, 1]" ] && [ "$(curl -s "http://127.0.0.1:$MOCK_PORT/__stats" | j 'set(c["path"] for c in d["calls"])')" = "{'/v1/images/edits'}" ] && ok "图生图同样补图：n=$(ns)，全部走 /images/edits" || fail "$s $(ns)"
+
+curl "${A[@]}" -X PUT "$U/api/settings" -d '{"missingPolicy":"report"}' > /dev/null
+reset; job=$(curl "${A[@]}" -X POST "$U/api/generate" -d '{"prompt":"只报告","n":4,"group":"cap1"}' | j 'd["id"]'); s=$(wait_job "$job")
+[ "$(cnt "$s")" = "('partial', 4, 1, 1, 0, 1, 1)" ] && [ "$(ns)" = "[4]" ] && ok "missingPolicy=report：不补图，标记 partial：$(echo "$s" | j 'd["error"]')" || fail "$s $(ns)"
+reset; job=$(curl "${A[@]}" -X POST "$U/api/edit" -d "{\"prompt\":\"只报告编辑\",\"n\":4,\"group\":\"cap2\",\"images\":[{\"path\":\"$UP\"}]}" | j 'd["id"]'); s=$(wait_job "$job")
+[ "$(cnt "$s")" = "('partial', 4, 2, 2, 0, 1, 2)" ] && ok "图生图 report：2/4 张 partial" || fail "$s"
+curl "${A[@]}" -X PUT "$U/api/settings" -d '{"missingPolicy":"fill"}' > /dev/null
+
+reset; job=$(curl "${A[@]}" -X POST "$U/api/generate" -d '{"prompt":"补图途中出错","n":4,"group":"failnext"}' | j 'd["id"]'); s=$(wait_job "$job")
+[ "$(cnt "$s")" = "('partial', 4, 1, 1, 0, 2, 1)" ] && [ "$(ns)" = "[4, 1]" ] && echo "$s" | j 'd["error"]' | grep -q "第 2 次请求（补图）失败" && ok "补图出错立即停止（不重试），保留 1 张：$(echo "$s" | j 'd["error"]')" || fail "$s $(ns)"
+
+reset; job=$(curl "${A[@]}" -X POST "$U/api/generate" -d '{"prompt":"一张损坏","n":4,"group":"badone"}' | j 'd["id"]'); s=$(wait_job "$job")
+[ "$(cnt "$s")" = "('partial', 4, 4, 3, 1, 1, 3)" ] && [ "$(ns)" = "[4]" ] && ok "单张解码失败：保留其余 3 张、失败 1 张、不补图：$(echo "$s" | j 'd["error"]')" || fail "$s $(ns)"
+
+reset; job=$(curl "${A[@]}" -X POST "$U/api/generate" -d '{"prompt":"空 data","n":4,"group":"zero"}' | j 'd["id"]'); s=$(wait_job "$job")
+[ "$(cnt "$s")" = "('failed', 4, 0, 0, 0, 1, 0)" ] && [ "$(ns)" = "[4]" ] && ok "空 data：failed 且不补图：$(echo "$s" | j 'd["error"]')" || fail "$s $(ns)"
+
+reset; job=$(curl "${A[@]}" -X POST "$U/api/generate" -d '{"prompt":"取消保留","n":4,"group":"slow"}' | j 'd["id"]')
+for i in $(seq 60); do s=$(curl "${A[@]}" "$U/api/jobs/$job"); [ "$(echo "$s" | j 'd["saved"]')" -ge 1 ] && break; sleep 0.1; done
+curl "${A[@]}" -X POST "$U/api/jobs/$job/cancel" > /dev/null; s=$(wait_job "$job")
+[ "$(echo "$s" | j '(d["status"], d["saved"], len(d["items"]), d["requests"])')" = "('canceled', 1, 1, 2)" ] && [ -f "$(echo "$s" | j 'd["items"][0]["path"]')" ] || fail "$s"
+r=$(curl "${A[@]}" "$U/api/history?group=slow"); [ "$(echo "$r" | j 'd["total"]')" = 1 ] && ok "补图途中取消：status=canceled，保留已生成 1 张（文件与历史都在）" || fail "$r"
+sleep 1.6; [ "$(ns)" = "[4, 1]" ] && ok "取消后不再发起请求" || fail "$(ns)"
+
 step "日志与配置中不含明文密钥"
 grep -q "$KEY" "$TMP/core.log" "$TMP/home/logs/imagegend.log" && fail "日志泄露密钥" || ok "日志未出现明文 apiKey"
 

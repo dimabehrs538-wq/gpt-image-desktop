@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -35,7 +34,7 @@ var Version = "0.1.2"
 type Job struct {
 	ID         string       `json:"id"`
 	Mode       string       `json:"mode"`
-	Status     string       `json:"status"` // running / succeeded / failed / canceled
+	Status     string       `json:"status"` // running / succeeded / partial（只得到部分张数）/ failed / canceled
 	Group      string       `json:"group"`
 	Model      string       `json:"model"`
 	Prompt     string       `json:"prompt"`
@@ -47,7 +46,14 @@ type Job struct {
 	ElapsedMs  int64        `json:"elapsedMs"`
 	Error      string       `json:"error,omitempty"`
 	Items      []store.Item `json:"items"`
-	cancel     context.CancelFunc
+	// 期望 / 接口返回 / 已保存 / 失败 张数与请求次数（见 engine.Outcome），notes 为给用户的说明
+	Requested int      `json:"requested"`
+	Received  int      `json:"received"`
+	Saved     int      `json:"saved"`
+	Failed    int      `json:"failed"`
+	Requests  int      `json:"requests"`
+	Notes     []string `json:"notes,omitempty"`
+	cancel    context.CancelFunc
 }
 
 // Event SSE 事件。
@@ -518,7 +524,7 @@ func (s *Server) snapshot(j *Job) Job {
 func (s *Server) StartJob(p *engine.Prepared) Job {
 	ctx, cancel := context.WithCancel(context.Background())
 	j := &Job{ID: engine.NewID(), Mode: p.Req.Mode, Status: "running", Group: p.Req.Group, Model: p.Req.Model,
-		Prompt: p.Req.Prompt, Size: p.Req.Size, N: p.Req.N, InputCount: len(p.Images), CreatedAt: time.Now().UnixMilli(), Items: []store.Item{}, cancel: cancel}
+		Prompt: p.Req.Prompt, Size: p.Req.Size, N: p.Req.N, Requested: p.Req.N, InputCount: len(p.Images), CreatedAt: time.Now().UnixMilli(), Items: []store.Item{}, cancel: cancel}
 	s.mu.Lock()
 	s.jobs[j.ID] = j
 	s.pruneLocked()
@@ -529,33 +535,53 @@ func (s *Server) StartJob(p *engine.Prepared) Job {
 	go func() {
 		s.sem <- struct{}{}
 		defer func() { <-s.sem }()
-		items, err := s.Engine.Run(ctx, j.ID, p)
+		apply := func(o *engine.Outcome) {
+			j.Items = append([]store.Item{}, o.Items...)
+			j.Received, j.Saved, j.Failed, j.Requests = o.Received, o.Saved, o.Failed, o.Requests
+			j.Notes = append([]string{}, o.Notes...)
+		}
+		o := s.Engine.Execute(ctx, j.ID, p, func(o *engine.Outcome) {
+			// 逐张保存后推送进度：界面先显示已完成的图片，取消 / 失败时也保留
+			s.mu.Lock()
+			apply(o)
+			snap := s.snapshot(j)
+			s.mu.Unlock()
+			s.Publish("job", snap)
+		})
 		s.mu.Lock()
 		j.FinishedAt = time.Now().UnixMilli()
 		j.ElapsedMs = j.FinishedAt - j.CreatedAt
-		j.Items = items
-		switch {
-		case errors.Is(ctx.Err(), context.Canceled):
-			j.Status, j.Error = "canceled", "已取消"
-		case err != nil:
-			j.Status, j.Error = "failed", err.Error()
+		apply(o)
+		j.Status = o.Status()
+		switch j.Status {
+		case "canceled":
+			j.Error = "已取消"
+		case "succeeded":
+			j.Error = ""
 		default:
-			j.Status = "succeeded"
+			j.Error = o.Summary()
 		}
 		snap := s.snapshot(j)
 		s.mu.Unlock()
 		cancel()
-		if err != nil {
-			s.Log.Printf("任务 %s 失败（%dms）：%s", j.ID, j.ElapsedMs, j.Error)
+		if j.Status == "succeeded" {
+			s.Log.Printf("任务 %s 完成（%dms），期望 %d 张，保存 %d 张，请求 %d 次%s", j.ID, j.ElapsedMs, j.Requested, j.Saved, j.Requests, noteSuffix(o.Notes))
 		} else {
-			s.Log.Printf("任务 %s 完成（%dms），保存 %d 张", j.ID, j.ElapsedMs, len(items))
+			s.Log.Printf("任务 %s %s（%dms）：期望 %d 张，接口返回 %d 张，保存 %d 张，失败 %d 张，请求 %d 次：%s", j.ID, j.Status, j.ElapsedMs, j.Requested, j.Received, j.Saved, j.Failed, j.Requests, j.Error)
 		}
 		s.Publish("job", snap)
-		if len(items) > 0 {
-			s.Publish("history", map[string]any{"added": len(items)})
+		if o.Saved > 0 {
+			s.Publish("history", map[string]any{"added": o.Saved})
 		}
 	}()
 	return snap
+}
+
+func noteSuffix(notes []string) string {
+	if len(notes) == 0 {
+		return ""
+	}
+	return "（" + strings.Join(notes, "；") + "）"
 }
 
 func (s *Server) pruneLocked() {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowUpCircle, Bell, FolderOpen, Info, Laptop, Moon, Power, Save, ShieldCheck, Smartphone, Sun, Timer, FileImage, Settings as SettingsIcon } from "lucide-react";
+import { ArrowUpCircle, Bell, FolderOpen, Info, Laptop, Layers, Moon, Power, Save, ShieldCheck, Smartphone, Sun, Timer, FileImage, Settings as SettingsIcon } from "lucide-react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -91,6 +91,12 @@ export default function Settings() {
               <Input value={prefix} placeholder="imagegen" onChange={(e) => setPrefix(e.target.value)} className="w-36 font-mono text-xs" />
               <Button size="sm" variant="outline" disabled={prefix === (settings?.filenamePrefix ?? "")} onClick={() => save({ filenamePrefix: prefix }, "已保存文件名前缀")}>保存</Button>
             </div>
+          </Row>
+          <Separator />
+          <Row icon={Layers} title="张数不足时逐张补图"
+            desc="部分接口 / 中转站会忽略张数，一次只返回 1 张。开启后会按缺少的张数逐张补请求（每次只要 1 张，总请求数不超过所选张数；出错、返回空或取消时立即停止，不会无限重试，也不会更换模型或分组）。按张计费时总张数不超过所选张数；按次计费的中转站会多计最多「张数−1」次请求费用。关闭则只如实提示实际张数。">
+            <Switch checked={(settings?.missingPolicy ?? "fill") === "fill"} disabled={!settings}
+              onCheckedChange={(v) => save({ missingPolicy: v ? "fill" : "report" }, v ? "已开启逐张补图" : "已关闭逐张补图（只提示实际张数）")} />
           </Row>
         </CardContent>
       </Card>

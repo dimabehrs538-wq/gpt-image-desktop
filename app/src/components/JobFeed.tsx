@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, Ban, Clock, Loader2, Sparkles, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, Ban, Clock, Info, Loader2, Sparkles, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty } from "@/components/common";
 import { ImageCard } from "@/components/ImageCard";
 import { Lightbox } from "@/components/Lightbox";
-import { api, formatMs, formatTime, type HistoryItem, type Job } from "@/lib/api";
+import { api, countLine, formatMs, formatTime, jobCounts, type HistoryItem, type Job } from "@/lib/api";
 import { useData } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -48,29 +48,35 @@ export function JobFeed({ mode }: { mode: "generate" | "edit" }) {
                 <span>· {formatTime(j.createdAt)}</span>
               </div>
             </div>
-            {j.status === "running" && <Badge variant="brand" className="gap-1"><Loader2 className="animate-spin" />生成中 <Elapsed from={j.createdAt} /></Badge>}
+            {j.status === "running" && <Badge variant="brand" className="gap-1"><Loader2 className="animate-spin" />生成中{jobCounts(j).requested > 1 && ` ${jobCounts(j).saved}/${jobCounts(j).requested}`} <Elapsed from={j.createdAt} /></Badge>}
             {j.status === "succeeded" && <Badge variant="success" className="gap-1"><Clock />{formatMs(j.elapsedMs)}</Badge>}
+            {j.status === "partial" && <Badge variant="warning" className="gap-1" title={countLine(j)}><AlertTriangle />部分完成 {jobCounts(j).saved}/{jobCounts(j).requested}</Badge>}
             {j.status === "failed" && <Badge variant="destructive" className="gap-1"><AlertCircle />失败</Badge>}
-            {j.status === "canceled" && <Badge variant="secondary" className="gap-1"><Ban />已取消</Badge>}
+            {j.status === "canceled" && <Badge variant="secondary" className="gap-1"><Ban />已取消{jobCounts(j).saved > 0 && ` · 保留 ${jobCounts(j).saved} 张`}</Badge>}
             {j.status === "running" ? (
-              <Button size="icon-sm" variant="ghost" title="取消任务" onClick={() => run(() => api("POST", `/api/jobs/${j.id}/cancel`))}><Ban /></Button>
+              <Button size="icon-sm" variant="ghost" title={jobCounts(j).saved > 0 ? "取消任务（已生成的图片会保留）" : "取消任务"} onClick={() => run(() => api("POST", `/api/jobs/${j.id}/cancel`))}><Ban /></Button>
             ) : (
               <Button size="icon-sm" variant="ghost" title="从列表隐藏" onClick={() => setHidden((s) => new Set(s).add(j.id))}><X /></Button>
             )}
           </div>
-          {j.status === "running" && (
+          {j.status === "failed" && <div className="mb-2.5 rounded-lg border border-destructive/25 bg-destructive/5 p-2.5 font-mono text-xs break-all whitespace-pre-wrap text-destructive">{j.error}</div>}
+          {j.status === "partial" && (
+            <div className="mb-2.5 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-xs text-amber-700 dark:text-amber-400">
+              <p className="font-medium">{countLine(j)}</p>
+              {j.error && <p className="mt-1 break-all whitespace-pre-wrap">{j.error}</p>}
+            </div>
+          )}
+          {(j.status === "succeeded" || j.status === "canceled" || j.status === "running") && jobCounts(j).notes.length > 0 && (
+            <p className="mb-2.5 flex items-start gap-1 text-[11px] text-muted-foreground"><Info className="mt-px size-3 shrink-0" />{countLine(j)} · {jobCounts(j).notes.join("；")}</p>
+          )}
+          {(j.items.length > 0 || j.status === "running") && (
             <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-              {Array.from({ length: j.n }).map((_, i) => (
-                <div key={i} className="shimmer flex aspect-square items-center justify-center rounded-lg border border-dashed border-primary/30 bg-primary/5">
+              {j.items.map((it) => <ImageCard key={it.id} item={it} showMeta={false} onClick={() => setOpen(idx(it))} />)}
+              {j.status === "running" && Array.from({ length: Math.max(0, jobCounts(j).requested - j.items.length) }).map((_, i) => (
+                <div key={`p${i}`} className="shimmer flex aspect-square items-center justify-center rounded-lg border border-dashed border-primary/30 bg-primary/5">
                   <Sparkles className="size-5 animate-pulse text-primary/60" />
                 </div>
               ))}
-            </div>
-          )}
-          {j.status === "failed" && <div className="rounded-lg border border-destructive/25 bg-destructive/5 p-2.5 font-mono text-xs break-all whitespace-pre-wrap text-destructive">{j.error}</div>}
-          {j.items.length > 0 && (
-            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-              {j.items.map((it) => <ImageCard key={it.id} item={it} showMeta={false} onClick={() => setOpen(idx(it))} />)}
             </div>
           )}
         </div>

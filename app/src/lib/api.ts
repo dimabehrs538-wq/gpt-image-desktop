@@ -14,7 +14,9 @@ export interface GroupInput {
   keySource: "literal" | "env" | "ref"; apiKey: string; apiKeyEnv: string; apiKeyRef: KeyRef | null; makeDefault: boolean;
 }
 export interface GroupsResp { defaultGroup: string; groups: GroupView[]; configPath?: string }
-export interface Settings { outputDir: string; requestTimeoutSec: number; filenamePrefix: string }
+/** missingPolicy：接口返回张数少于请求时 fill=逐张补请求（每次 n=1，最多补到请求张数），report=只报告不补 */
+export type MissingPolicy = "fill" | "report";
+export interface Settings { outputDir: string; requestTimeoutSec: number; filenamePrefix: string; missingPolicy: MissingPolicy }
 export interface Status {
   version: string; pid: number; uptime: number; home: string; configPath: string; outputDir: string;
   groups: number; defaultGroup: string; activeJobs: number; historyCount: number; codexConfigPath: string;
@@ -27,9 +29,13 @@ export interface HistoryItem {
   sourceUrl?: string; inputImages?: string[]; mask?: string;
 }
 export interface Job {
-  id: string; mode: "generate" | "edit"; status: "running" | "succeeded" | "failed" | "canceled"; group: string; model: string;
+  id: string; mode: "generate" | "edit"; status: "running" | "succeeded" | "partial" | "failed" | "canceled"; group: string; model: string;
   prompt: string; size?: string; n: number; inputCount: number; createdAt: number; finishedAt?: number; elapsedMs: number;
   error?: string; items: HistoryItem[];
+  /** 期望张数 / 接口实际返回 / 已保存 / 无法使用 / 请求次数（旧内核没有这些字段时按 n 与 items 推断） */
+  requested?: number; received?: number; saved?: number; failed?: number; requests?: number;
+  /** 给用户的说明，例如「接口只返回了 1/4 张」「已逐张补请求 3 次」 */
+  notes?: string[];
 }
 export interface ProbeResult { ok: boolean; status: number; latencyMs: number; message: string; url: string; modelCount: number; modelListed: boolean }
 /** 分组模型列表缓存（内核 GET /api/models、POST /api/groups/{name}/models 返回；不含任何密钥） */
@@ -126,6 +132,22 @@ export function formatBytes(n = 0) {
   do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
   return `${n.toFixed(n < 10 ? 1 : 0)} ${u[i]}`;
 }
+/** 任务张数统计（兼容没有计数字段的旧内核） */
+export function jobCounts(j: Job) {
+  const requested = j.requested ?? j.n;
+  const saved = j.saved ?? j.items.length;
+  return { requested, saved, received: j.received ?? saved, failed: j.failed ?? 0, requests: j.requests ?? (j.status === "running" ? 0 : 1), notes: j.notes ?? [] };
+}
+
+/** 一句话张数说明，例如「期望 4 张，已保存 1 张 · 失败 1 张 · 请求 2 次」 */
+export function countLine(j: Job) {
+  const c = jobCounts(j);
+  const parts = [`期望 ${c.requested} 张，已保存 ${c.saved} 张`];
+  if (c.failed > 0) parts.push(`无法使用 ${c.failed} 张`);
+  if (c.requests > 1) parts.push(`请求 ${c.requests} 次`);
+  return parts.join(" · ");
+}
+
 export function formatMs(ms = 0) {
   if (ms < 1000) return `${ms} ms`;
   const s = ms / 1000;

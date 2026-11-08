@@ -194,3 +194,30 @@ func TestSaveNoOverwrite(t *testing.T) {
 		t.Fatal("ext detection")
 	}
 }
+
+// 部分条目不可用：可用的图片照常返回，失败的条目通过 PartialError 逐条说明（URL 下载失败不泄露密钥）。
+func TestPartialImages(t *testing.T) {
+	img := pngBytes(t, color.White)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/images/generations", func(w http.ResponseWriter, r *http.Request) {
+		host := "http://" + r.Host
+		json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{
+			{"b64_json": base64.StdEncoding.EncodeToString(img)},
+			{"b64_json": "@@bad@@"},
+			{"url": host + "/missing.png?k=" + testKey},
+			{},
+			{"b64_json": base64.StdEncoding.EncodeToString(img)},
+		}})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	res, err := New(0).Generate(context.Background(), ep(srv.URL), Params{Model: "gpt-image-2", Prompt: "x", N: 5})
+	pe, ok := err.(*PartialError)
+	if !ok || len(res) != 2 || len(pe.Failures) != 3 {
+		t.Fatalf("res=%d err=%v", len(res), err)
+	}
+	msg := pe.Error()
+	if !strings.Contains(msg, "第 2 张") || !strings.Contains(msg, "第 3 张图片下载失败") || !strings.Contains(msg, "第 4 张图片既没有") || strings.Contains(msg, testKey) {
+		t.Fatal(msg)
+	}
+}

@@ -16,7 +16,15 @@ type Settings struct {
 	OutputDir         string `json:"outputDir"`
 	RequestTimeoutSec int    `json:"requestTimeoutSec"`
 	FilenamePrefix    string `json:"filenamePrefix"`
+	// MissingPolicy 接口返回张数少于请求时：fill（默认）逐张补请求，最多补到请求张数为止；report 只如实报告不补
+	MissingPolicy string `json:"missingPolicy"`
 }
+
+// 张数不足时的处理方式。
+const (
+	MissingFill   = "fill"
+	MissingReport = "report"
+)
 
 // Item 一张生成结果的历史记录。
 type Item struct {
@@ -108,6 +116,9 @@ func (s *Store) settings() Settings {
 	if st.RequestTimeoutSec <= 0 {
 		st.RequestTimeoutSec = 600
 	}
+	if st.MissingPolicy != MissingReport {
+		st.MissingPolicy = MissingFill
+	}
 	return st
 }
 
@@ -116,6 +127,7 @@ type SettingsPatch struct {
 	OutputDir         *string `json:"outputDir"`
 	RequestTimeoutSec *int    `json:"requestTimeoutSec"`
 	FilenamePrefix    *string `json:"filenamePrefix"`
+	MissingPolicy     *string `json:"missingPolicy"`
 }
 
 // UpdateSettings 应用部分更新。
@@ -144,6 +156,12 @@ func (s *Store) UpdateSettings(p SettingsPatch) (Settings, error) {
 	}
 	if p.FilenamePrefix != nil {
 		st.FilenamePrefix = strings.TrimSpace(*p.FilenamePrefix)
+	}
+	if p.MissingPolicy != nil {
+		if *p.MissingPolicy != MissingFill && *p.MissingPolicy != MissingReport {
+			return st, errors.New("张数不足处理方式只能是 fill 或 report")
+		}
+		st.MissingPolicy = *p.MissingPolicy
 	}
 	return st, writeJSON(filepath.Join(s.dir, "settings.json"), st)
 }

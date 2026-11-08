@@ -35,6 +35,19 @@ pub struct Image {
     pub revised_prompt: String,
 }
 
+/// 一次请求的结果：可用的图片 + 无法使用的条目说明（与 Go `imageapi.PartialError` 对应）。
+#[derive(Debug, Default)]
+pub struct Batch {
+    pub images: Vec<Image>,
+    pub failures: Vec<String>,
+}
+
+impl Batch {
+    pub fn failure_text(&self) -> String {
+        format!("{} 张图片无法使用：{}", self.failures.len(), self.failures.join("；"))
+    }
+}
+
 /// 接口返回的错误（已脱敏）。
 #[derive(Debug, Clone, Default)]
 pub struct ApiError {
@@ -162,7 +175,7 @@ impl Client {
         Self { http }
     }
 
-    pub async fn generate(&self, ep: &Endpoint, p: &Params) -> Result<Vec<Image>, String> {
+    pub async fn generate(&self, ep: &Endpoint, p: &Params) -> Result<Batch, String> {
         validate(p)?;
         let mut body = Map::new();
         body.insert("model".into(), json!(p.model));
@@ -184,7 +197,7 @@ impl Client {
     }
 
     /// 图生图 / 图像编辑：单图用 image 字段，多图按顺序用 image[] 字段。
-    pub async fn edit(&self, ep: &Endpoint, p: &Params, images: &[InputImage], mask: Option<&InputImage>) -> Result<Vec<Image>, String> {
+    pub async fn edit(&self, ep: &Endpoint, p: &Params, images: &[InputImage], mask: Option<&InputImage>) -> Result<Batch, String> {
         validate(p)?;
         if images.is_empty() {
             return Err("请至少提供一张参考图".into());
@@ -211,7 +224,7 @@ impl Client {
         self.send(ep, req).await
     }
 
-    async fn send(&self, ep: &Endpoint, req: reqwest::RequestBuilder) -> Result<Vec<Image>, String> {
+    async fn send(&self, ep: &Endpoint, req: reqwest::RequestBuilder) -> Result<Batch, String> {
         let key = ep.key.as_str();
         let resp = req
             .bearer_auth(key)
@@ -249,24 +262,36 @@ impl Client {
             return Err(ApiError { status, message: "接口未返回任何图片（data 为空）".into(), ..Default::default() }.to_string());
         }
         let mut out = Vec::with_capacity(data.len());
+        let mut failures = Vec::new();
         for (i, d) in data.into_iter().enumerate() {
             let mut im = Image { revised_prompt: d.revised_prompt.unwrap_or_default(), ..Default::default() };
             let b64 = d.b64_json.unwrap_or_default();
             let url = d.url.unwrap_or_default();
             if !b64.is_empty() {
-                im.data = decode_b64(&b64).map_err(|e| format!("第 {} 张图片 b64_json 解码失败：{}", i + 1, e))?;
+                match decode_b64(&b64) {
+                    Ok(x) => im.data = x,
+                    Err(e) => {
+                        failures.push(format!("第 {} 张图片 b64_json 解码失败：{}", i + 1, e));
+                        continue;
+                    }
+                }
             } else if !url.is_empty() {
-                im.data = self
-                    .download(&url)
-                    .await
-                    .map_err(|e| format!("第 {} 张图片下载失败：{}", i + 1, redact(&e, &[key])))?;
+                match self.download(&url).await {
+                    Ok(x) => im.data = x,
+                    Err(e) => {
+                        failures.push(format!("第 {} 张图片下载失败：{}", i + 1, redact(&e, &[key])));
+                        continue;
+                    }
+                }
                 im.source_url = url;
             } else {
-                return Err(format!("第 {} 张图片既没有 b64_json 也没有 url", i + 1));
+                failures.push(format!("第 {} 张图片既没有 b64_json 也没有 url", i + 1));
+                continue;
             }
             out.push(im);
         }
-        Ok(out)
+        // 部分（或全部）条目不可用：可用的图片照常返回，调用方保存并如实统计失败张数
+        Ok(Batch { images: out, failures })
     }
 
     async fn download(&self, u: &str) -> Result<Vec<u8>, String> {

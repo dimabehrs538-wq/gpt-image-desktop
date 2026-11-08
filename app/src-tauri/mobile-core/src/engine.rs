@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::{self, redact, Endpoint};
 use crate::imageapi::{Client, InputImage, Params};
@@ -156,28 +157,15 @@ impl Engine {
         Ok((name, path.to_string_lossy().into_owned()))
     }
 
-    /// 执行请求：调用接口 → 防覆盖落盘 → 写入历史。
-    pub async fn run(&self, job_id: &str, p: &Prepared) -> Result<Vec<Item>, String> {
+    /// 执行请求：调用接口 → 防覆盖落盘 → 逐张写入历史（对齐 Go `Engine.Execute`）。
+    /// 接口返回张数少于 n 时按设置 missingPolicy=fill 逐张补请求（每次 n=1），总请求次数不超过 n；
+    /// 任一请求出错、返回 0 张、有图片无法使用或被取消时立即停止，不无限重试。已保存的图片始终保留。
+    pub async fn execute(&self, job_id: &str, p: &Prepared, cancel: &CancellationToken, mut progress: impl FnMut(&Outcome)) -> Outcome {
         let st = self.store.settings();
         let client = Client::new(Duration::from_secs(st.request_timeout_sec.max(1) as u64));
         let r = &p.req;
-        let params = Params {
-            model: r.model.clone(),
-            prompt: r.prompt.clone(),
-            size: r.size.clone(),
-            quality: r.quality.clone(),
-            background: r.background.clone(),
-            output_format: r.output_format.clone(),
-            n: r.n,
-        };
+        let mut o = Outcome { requested: r.n, ..Default::default() };
         let start = chrono::Local::now();
-        let res = if r.mode == "edit" {
-            client.edit(&p.endpoint, &params, &p.images, p.mask.as_ref()).await
-        } else {
-            client.generate(&p.endpoint, &params).await
-        };
-        let elapsed = (chrono::Local::now() - start).num_milliseconds();
-        let imgs = res.map_err(|e| redact(&e, &[&p.endpoint.key]))?;
         let mut base = safe_base(&r.name);
         if base.is_empty() {
             let mut prefix = safe_base(&st.filename_prefix);
@@ -189,42 +177,165 @@ impl Engine {
             }
             base = format!("{prefix}-{}", start.format("%Y%m%d-%H%M%S"));
         }
-        let out_dir = Path::new(&st.output_dir);
-        let mut items = Vec::with_capacity(imgs.len());
-        for (i, im) in imgs.iter().enumerate() {
-            let b = if imgs.len() > 1 { format!("{base}-{}", i + 1) } else { base.clone() };
-            let path = match save_no_overwrite(out_dir, &b, ext_for(&im.data, &r.output_format), &im.data) {
-                Ok(x) => x,
-                Err(e) => return Err(format!("保存图片失败：{e}")),
-            };
-            let (w, h) = crate::util::image_size(&im.data).unwrap_or((0, 0));
-            items.push(Item {
-                id: new_id(),
-                job_id: job_id.into(),
-                created_at: start.timestamp_millis(),
-                mode: r.mode.clone(),
-                group: r.group.clone(),
-                base_url: p.endpoint.base_url.clone(),
+        let max_requests = if st.missing_policy == store::MISSING_FILL { r.n } else { 1 };
+        while o.received < o.requested && o.requests < max_requests {
+            // 补图请求每次只要 1 张：接口忽略 n 时不会按大 n 重复计费
+            let n = if o.requests > 0 { 1 } else { o.requested - o.received };
+            let params = Params {
                 model: r.model.clone(),
                 prompt: r.prompt.clone(),
-                revised_prompt: im.revised_prompt.clone(),
                 size: r.size.clone(),
                 quality: r.quality.clone(),
                 background: r.background.clone(),
                 output_format: r.output_format.clone(),
-                n: r.n,
-                index: i as i64,
-                path: path.to_string_lossy().into_owned(),
-                file_size: im.data.len() as i64,
-                width: w,
-                height: h,
-                elapsed_ms: elapsed,
-                source_url: im.source_url.clone(),
-                input_images: p.paths.clone(),
-                mask: p.mask_path.clone(),
-            });
+                n,
+            };
+            o.requests += 1;
+            let call = async {
+                if r.mode == "edit" {
+                    client.edit(&p.endpoint, &params, &p.images, p.mask.as_ref()).await
+                } else {
+                    client.generate(&p.endpoint, &params).await
+                }
+            };
+            let res = tokio::select! {
+                _ = cancel.cancelled() => None,
+                x = call => Some(x),
+            };
+            let batch = match res {
+                None => {
+                    o.canceled = true;
+                    break;
+                }
+                Some(Err(e)) => {
+                    let mut msg = redact(&e, &[&p.endpoint.key]);
+                    if o.requests > 1 {
+                        msg = format!("第 {} 次请求（补图）失败：{}", o.requests, msg);
+                    }
+                    o.err = msg;
+                    break;
+                }
+                Some(Ok(b)) => b,
+            };
+            if batch.images.is_empty() && batch.failures.is_empty() {
+                o.err = "接口未返回任何图片（data 为空）".into();
+                break;
+            }
+            o.received += (batch.images.len() + batch.failures.len()) as i64;
+            if !batch.failures.is_empty() {
+                o.failed += batch.failures.len() as i64;
+                o.err = redact(&batch.failure_text(), &[&p.endpoint.key]);
+            }
+            let total = batch.images.len();
+            for (k, im) in batch.images.iter().enumerate() {
+                // 接口多返回的图片也保存（已生成，可能已计费）
+                match self.save_one(&st, &base, &start, job_id, p, o.saved, im) {
+                    Ok(it) => {
+                        o.items.push(it);
+                        o.saved += 1;
+                        progress(&o);
+                    }
+                    Err(e) => {
+                        o.failed += (total - k) as i64;
+                        o.err = e;
+                        break;
+                    }
+                }
+            }
+            if cancel.is_cancelled() {
+                o.canceled = true;
+            }
+            if !o.err.is_empty() || o.canceled {
+                break; // 有图片无法使用 / 保存失败：这些图片接口已生成（可能已计费），不自动补，如实报告
+            }
+            if o.requests == 1 && o.received < o.requested {
+                o.notes.push(format!("接口只返回了 {}/{} 张（该接口可能不支持一次生成多张）", o.received, o.requested));
+            }
         }
-        self.store.add_items(&items).map_err(|e| format!("写入历史失败：{e}"))?;
-        Ok(items)
+        if o.requests > 1 {
+            o.notes.push(format!("已逐张补请求 {} 次", o.requests - 1));
+        }
+        if !o.canceled && o.err.is_empty() && o.saved < o.requested && st.missing_policy == store::MISSING_REPORT {
+            o.notes.push("未自动补图（设置为只报告）".into());
+        }
+        if o.canceled {
+            o.notes.push(format!("已取消，保留已生成的 {} 张", o.saved));
+        }
+        progress(&o);
+        o
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn save_one(&self, st: &store::Settings, base: &str, start: &chrono::DateTime<chrono::Local>, job_id: &str, p: &Prepared, index: i64, im: &crate::imageapi::Image) -> Result<Item, String> {
+        let r = &p.req;
+        let b = if r.n > 1 { format!("{base}-{}", index + 1) } else { base.to_string() };
+        let path = save_no_overwrite(Path::new(&st.output_dir), &b, ext_for(&im.data, &r.output_format), &im.data)
+            .map_err(|e| format!("保存第 {} 张图片失败：{e}", index + 1))?;
+        let (w, h) = crate::util::image_size(&im.data).unwrap_or((0, 0));
+        let it = Item {
+            id: new_id(),
+            job_id: job_id.into(),
+            created_at: start.timestamp_millis(),
+            mode: r.mode.clone(),
+            group: r.group.clone(),
+            base_url: p.endpoint.base_url.clone(),
+            model: r.model.clone(),
+            prompt: r.prompt.clone(),
+            revised_prompt: im.revised_prompt.clone(),
+            size: r.size.clone(),
+            quality: r.quality.clone(),
+            background: r.background.clone(),
+            output_format: r.output_format.clone(),
+            n: r.n,
+            index,
+            path: path.to_string_lossy().into_owned(),
+            file_size: im.data.len() as i64,
+            width: w,
+            height: h,
+            elapsed_ms: (chrono::Local::now() - *start).num_milliseconds(),
+            source_url: im.source_url.clone(),
+            input_images: p.paths.clone(),
+            mask: p.mask_path.clone(),
+        };
+        self.store.add_items(std::slice::from_ref(&it)).map_err(|e| format!("写入历史失败：{e}"))?;
+        Ok(it)
+    }
+}
+
+/// 一次任务的实际结果（期望 / 接口返回 / 已保存 / 失败 张数与请求次数），与 Go `engine.Outcome` 一致。
+#[derive(Debug, Clone, Default)]
+pub struct Outcome {
+    pub requested: i64,
+    pub received: i64,
+    pub saved: i64,
+    pub failed: i64,
+    pub requests: i64,
+    pub notes: Vec<String>,
+    pub items: Vec<Item>,
+    pub err: String,
+    pub canceled: bool,
+}
+
+impl Outcome {
+    /// succeeded（张数齐全）/ partial（只得到部分）/ failed / canceled
+    pub fn status(&self) -> &'static str {
+        if self.canceled {
+            "canceled"
+        } else if self.saved >= self.requested && self.err.is_empty() {
+            "succeeded"
+        } else if self.saved > 0 {
+            "partial"
+        } else {
+            "failed"
+        }
+    }
+
+    pub fn summary(&self) -> String {
+        let mut parts = Vec::new();
+        if !self.err.is_empty() {
+            parts.push(self.err.clone());
+        }
+        parts.extend(self.notes.iter().cloned());
+        parts.join("；")
     }
 }
