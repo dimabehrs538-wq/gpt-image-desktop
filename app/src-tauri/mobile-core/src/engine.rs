@@ -256,7 +256,7 @@ impl Engine {
             o.notes.push(format!("已逐张补请求 {} 次", o.requests - 1));
         }
         if !o.canceled && o.err.is_empty() && o.saved < o.requested && st.missing_policy == store::MISSING_REPORT {
-            o.notes.push("未自动补图（设置为只报告）".into());
+            o.notes.push("未自动补图（默认只报告，可在设置中开启“张数不足时逐张补图”）".into());
         }
         if o.canceled {
             o.notes.push(format!("已取消，保留已生成的 {} 张", o.saved));

@@ -93,10 +93,10 @@ export default function Settings() {
             </div>
           </Row>
           <Separator />
-          <Row icon={Layers} title="张数不足时逐张补图"
-            desc="部分接口 / 中转站会忽略张数，一次只返回 1 张。开启后会按缺少的张数逐张补请求（每次只要 1 张，总请求数不超过所选张数；出错、返回空或取消时立即停止，不会无限重试，也不会更换模型或分组）。按张计费时总张数不超过所选张数；按次计费的中转站会多计最多「张数−1」次请求费用。关闭则只如实提示实际张数。">
-            <Switch checked={(settings?.missingPolicy ?? "fill") === "fill"} disabled={!settings}
-              onCheckedChange={(v) => save({ missingPolicy: v ? "fill" : "report" }, v ? "已开启逐张补图" : "已关闭逐张补图（只提示实际张数）")} />
+          <Row icon={Layers} title="张数不足时逐张补图（默认关闭）"
+            desc="部分接口 / 中转站会忽略张数，一次只返回 1 张。默认关闭：只发 1 次请求，如实显示「部分完成 x/y」。开启后，返回张数不足时会对缺少的张数逐张追加请求（每次 1 张；同一分组、同一模型；这不是失败重试，出错、返回空或取消即停止）。注意：选 N 张时最多额外 N−1 次请求，可能产生额外费用（按次计费的中转站会多计费；按张计费也可能因平台内部计费或多返回图片而多收）。">
+            <Switch checked={settings?.missingPolicy === "fill"} disabled={!settings}
+              onCheckedChange={(v) => save({ missingPolicy: v ? "fill" : "report" }, v ? "已开启逐张补图（最多额外 N−1 次请求，可能产生额外费用）" : "已关闭逐张补图（只发 1 次请求，如实提示实际张数）")} />
           </Row>
         </CardContent>
       </Card>

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -166,7 +167,7 @@ func TestCountsNormal(t *testing.T) {
 func TestProviderReturnsOneFill(t *testing.T) {
 	for _, mode := range []string{"generate", "edit"} {
 		f := &fakeAPI{cap: 1}
-		e, _ := newEngine(t, "")
+		e, _ := newEngine(t, store.MissingFill)
 		var progress []int
 		o := e.Execute(context.Background(), "j", prepared(f.server(t).URL, mode, 4), func(o *Outcome) { progress = append(progress, o.Saved) })
 		check(t, o, "succeeded", 4, 4, 4, 0, 4)
@@ -187,7 +188,7 @@ func TestProviderReturnsOneFill(t *testing.T) {
 
 func TestProviderReturnsTwo(t *testing.T) {
 	f := &fakeAPI{cap: 2}
-	e, _ := newEngine(t, "")
+	e, _ := newEngine(t, store.MissingFill)
 	o := e.Execute(context.Background(), "j", prepared(f.server(t).URL, "generate", 4), nil)
 	check(t, o, "succeeded", 4, 4, 4, 0, 3)
 	if fmtInts(f.ns) != "[4 1 1]" {
@@ -212,7 +213,7 @@ func TestReportPolicyNoFill(t *testing.T) {
 
 func TestFillStopsOnError(t *testing.T) {
 	f := &fakeAPI{cap: 1, failFrom: 3}
-	e, _ := newEngine(t, "")
+	e, _ := newEngine(t, store.MissingFill)
 	o := e.Execute(context.Background(), "j", prepared(f.server(t).URL, "generate", 4), nil)
 	check(t, o, "partial", 4, 2, 2, 0, 3)
 	if !strings.Contains(o.Summary(), "第 3 次请求（补图）失败") || !strings.Contains(o.Summary(), "HTTP 500") {
@@ -250,7 +251,7 @@ func TestPartialDecodeKeepsGoodAndNoFill(t *testing.T) {
 
 func TestCancelKeepsSaved(t *testing.T) {
 	f := &fakeAPI{cap: 1, delay: 300 * time.Millisecond}
-	e, _ := newEngine(t, "")
+	e, _ := newEngine(t, store.MissingFill)
 	ctx, cancel := context.WithCancel(context.Background())
 	o := e.Execute(ctx, "j", prepared(f.server(t).URL, "generate", 4), func(o *Outcome) {
 		if o.Saved == 1 {
@@ -279,4 +280,53 @@ func fmtInts(v []int) string {
 		s[i] = strconv.Itoa(x)
 	}
 	return "[" + strings.Join(s, " ") + "]"
+}
+
+// 默认（新安装 / 旧配置没有 missingPolicy 字段）只发 1 次请求并如实标记 partial，不自动追加请求
+func TestDefaultPolicyNoExtraRequests(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		for _, mode := range []string{"generate", "edit"} {
+			api := &fakeAPI{cap: 1}
+			srv := api.server(t)
+			e, dir := newEngine(t, "")
+			if legacy {
+				// 旧版本写入的 settings.json：没有 missingPolicy 字段
+				_ = os.MkdirAll(filepath.Join(dir, "home"), 0o700)
+				if err := os.WriteFile(filepath.Join(dir, "home", "settings.json"), []byte(`{"requestTimeoutSec":300,"filenamePrefix":"old"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := e.Store.Settings().MissingPolicy; got != store.MissingReport {
+				t.Fatalf("legacy=%v default policy=%q", legacy, got)
+			}
+			o := e.Execute(context.Background(), "job", prepared(srv.URL, mode, 4), nil)
+			check(t, o, "partial", 4, 1, 1, 0, 1)
+			if fmt.Sprint(api.ns) != "[4]" {
+				t.Fatalf("legacy=%v %s: requests n=%v, want [4]", legacy, mode, api.ns)
+			}
+			if !strings.Contains(o.Summary(), "未自动补图") {
+				t.Fatalf("summary=%q", o.Summary())
+			}
+		}
+	}
+}
+
+// 用户主动开启 fill 后才逐张补请求，且总请求数不超过 n
+func TestFillOnlyWhenExplicitlyEnabled(t *testing.T) {
+	api := &fakeAPI{cap: 1}
+	srv := api.server(t)
+	e, _ := newEngine(t, "")
+	fill := store.MissingFill
+	if _, err := e.Store.UpdateSettings(store.SettingsPatch{MissingPolicy: &fill}); err != nil {
+		t.Fatal(err)
+	}
+	o := e.Execute(context.Background(), "job", prepared(srv.URL, "generate", 4), nil)
+	check(t, o, "succeeded", 4, 4, 4, 0, 4)
+	if fmt.Sprint(api.ns) != "[4 1 1 1]" {
+		t.Fatalf("n=%v", api.ns)
+	}
+	// 再次读取设置仍是用户的明确选择，不被默认值覆盖
+	if got := e.Store.Settings().MissingPolicy; got != store.MissingFill {
+		t.Fatalf("policy=%q", got)
+	}
 }

@@ -116,12 +116,20 @@ done
 reset() { curl -s "http://127.0.0.1:$MOCK_PORT/__reset" > /dev/null; }
 ns() { curl -s "http://127.0.0.1:$MOCK_PORT/__stats" | j '[c["n"] for c in d["calls"]]'; }
 cnt() { echo "$1" | j '(d["status"], d["requested"], d["received"], d["saved"], d["failed"], d["requests"], len(d["items"]))'; }
-r=$(curl "${A[@]}" "$U/api/settings"); [ "$(echo "$r" | j 'd["missingPolicy"]')" = fill ] && ok "默认 missingPolicy=fill" || fail "$r"
+r=$(curl "${A[@]}" "$U/api/settings"); [ "$(echo "$r" | j 'd["missingPolicy"]')" = report ] && ok "默认 missingPolicy=report（不自动追加请求）" || fail "$r"
 code=$(curl -s -o /dev/null -w '%{http_code}' "${A[@]}" -X PUT "$U/api/settings" -d '{"missingPolicy":"forever"}'); [ "$code" = 400 ] && ok "非法 missingPolicy 被拒绝（400）" || fail "期望 400，实际 $code"
 
 reset; job=$(curl "${A[@]}" -X POST "$U/api/generate" -d '{"prompt":"四张正常","n":4,"group":"mock"}' | j 'd["id"]'); s=$(wait_job "$job")
 [ "$(cnt "$s")" = "('succeeded', 4, 4, 4, 0, 1, 4)" ] && [ "$(ns)" = "[4]" ] && ok "支持 n 的接口：1 次请求 4/4 张" || fail "$s $(ns)"
 
+reset; job=$(curl "${A[@]}" -X POST "$U/api/generate" -d '{"prompt":"默认只报告","n":4,"group":"cap1"}' | j 'd["id"]'); s=$(wait_job "$job")
+[ "$(cnt "$s")" = "('partial', 4, 1, 1, 0, 1, 1)" ] && [ "$(ns)" = "[4]" ] && ok "默认：只发 1 次请求，标记 partial：$(echo "$s" | j 'd["error"]')" || fail "$s $(ns)"
+reset; job=$(curl "${A[@]}" -X POST "$U/api/edit" -d "{\"prompt\":\"默认只报告编辑\",\"n\":4,\"group\":\"cap2\",\"images\":[{\"path\":\"$UP\"}]}" | j 'd["id"]'); s=$(wait_job "$job")
+[ "$(cnt "$s")" = "('partial', 4, 2, 2, 0, 1, 2)" ] && [ "$(ns)" = "[4]" ] && ok "默认图生图：2/4 张 partial，1 次请求" || fail "$s $(ns)"
+
+r=$(curl "${A[@]}" -X PUT "$U/api/settings" -d '{"missingPolicy":"fill"}'); [ "$(echo "$r" | j 'd["missingPolicy"]')" = fill ] && ok "用户主动开启 fill" || fail "$r"
+curl "${A[@]}" -X PUT "$U/api/settings" -d '{"filenamePrefix":"imagegen"}' > /dev/null
+[ "$(curl "${A[@]}" "$U/api/settings" | j 'd["missingPolicy"]')" = fill ] && ok "修改其它设置不改动用户选择" || fail "policy 被重置"
 curl -sN -m 6 "$U/api/events?token=$TOKEN" > "$TMP/sse-count.txt" 2>/dev/null & SSE_PID=$!; sleep 0.3
 reset; job=$(curl "${A[@]}" -X POST "$U/api/generate" -d '{"prompt":"中转只回一张","n":4,"group":"cap1","name":"cap1"}' | j 'd["id"]'); s=$(wait_job "$job")
 [ "$(cnt "$s")" = "('succeeded', 4, 4, 4, 0, 4, 4)" ] && [ "$(ns)" = "[4, 1, 1, 1]" ] || fail "$s $(ns)"
@@ -143,12 +151,6 @@ PY
 reset; job=$(curl "${A[@]}" -X POST "$U/api/edit" -d "{\"prompt\":\"编辑中转只回两张\",\"n\":4,\"group\":\"cap2\",\"images\":[{\"path\":\"$UP\"}]}" | j 'd["id"]'); s=$(wait_job "$job")
 [ "$(cnt "$s")" = "('succeeded', 4, 4, 4, 0, 3, 4)" ] && [ "$(ns)" = "[4, 1, 1]" ] && [ "$(curl -s "http://127.0.0.1:$MOCK_PORT/__stats" | j 'set(c["path"] for c in d["calls"])')" = "{'/v1/images/edits'}" ] && ok "图生图同样补图：n=$(ns)，全部走 /images/edits" || fail "$s $(ns)"
 
-curl "${A[@]}" -X PUT "$U/api/settings" -d '{"missingPolicy":"report"}' > /dev/null
-reset; job=$(curl "${A[@]}" -X POST "$U/api/generate" -d '{"prompt":"只报告","n":4,"group":"cap1"}' | j 'd["id"]'); s=$(wait_job "$job")
-[ "$(cnt "$s")" = "('partial', 4, 1, 1, 0, 1, 1)" ] && [ "$(ns)" = "[4]" ] && ok "missingPolicy=report：不补图，标记 partial：$(echo "$s" | j 'd["error"]')" || fail "$s $(ns)"
-reset; job=$(curl "${A[@]}" -X POST "$U/api/edit" -d "{\"prompt\":\"只报告编辑\",\"n\":4,\"group\":\"cap2\",\"images\":[{\"path\":\"$UP\"}]}" | j 'd["id"]'); s=$(wait_job "$job")
-[ "$(cnt "$s")" = "('partial', 4, 2, 2, 0, 1, 2)" ] && ok "图生图 report：2/4 张 partial" || fail "$s"
-curl "${A[@]}" -X PUT "$U/api/settings" -d '{"missingPolicy":"fill"}' > /dev/null
 
 reset; job=$(curl "${A[@]}" -X POST "$U/api/generate" -d '{"prompt":"补图途中出错","n":4,"group":"failnext"}' | j 'd["id"]'); s=$(wait_job "$job")
 [ "$(cnt "$s")" = "('partial', 4, 1, 1, 0, 2, 1)" ] && [ "$(ns)" = "[4, 1]" ] && echo "$s" | j 'd["error"]' | grep -q "第 2 次请求（补图）失败" && ok "补图出错立即停止（不重试），保留 1 张：$(echo "$s" | j 'd["error"]')" || fail "$s $(ns)"

@@ -47,3 +47,36 @@ func TestHistoryAndSettings(t *testing.T) {
 		}
 	}
 }
+
+func TestMissingPolicyDefaultReport(t *testing.T) {
+	dir := t.TempDir()
+	s := New(dir, filepath.Join(dir, "out"))
+	if got := s.Settings().MissingPolicy; got != MissingReport {
+		t.Fatalf("new install policy=%q, want report", got)
+	}
+	// 旧配置缺少字段、或字段为空 / 未知值：一律按 report，不自动迁移为 fill
+	for _, raw := range []string{`{"filenamePrefix":"x"}`, `{"missingPolicy":""}`, `{"missingPolicy":"auto"}`} {
+		if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := s.Settings().MissingPolicy; got != MissingReport {
+			t.Fatalf("%s → %q, want report", raw, got)
+		}
+	}
+	bad := "forever"
+	if _, err := s.UpdateSettings(SettingsPatch{MissingPolicy: &bad}); err == nil {
+		t.Fatal("invalid policy accepted")
+	}
+	fill := MissingFill
+	if st, err := s.UpdateSettings(SettingsPatch{MissingPolicy: &fill}); err != nil || st.MissingPolicy != MissingFill {
+		t.Fatalf("enable fill: %v %v", st.MissingPolicy, err)
+	}
+	// 其它设置更新不改动用户的明确选择
+	p := "y"
+	if st, _ := s.UpdateSettings(SettingsPatch{FilenamePrefix: &p}); st.MissingPolicy != MissingFill {
+		t.Fatalf("policy reset to %q", st.MissingPolicy)
+	}
+	if got := s.Settings().MissingPolicy; got != MissingFill {
+		t.Fatalf("persisted policy=%q", got)
+	}
+}

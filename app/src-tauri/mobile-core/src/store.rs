@@ -18,7 +18,7 @@ pub struct Settings {
     pub request_timeout_sec: i64,
     #[serde(deserialize_with = "null_default")]
     pub filename_prefix: String,
-    /// 接口返回张数少于请求时：fill（默认）逐张补请求，最多补到请求张数；report 只如实报告不补
+    /// 接口返回张数少于请求时：report（默认）只发 1 次请求并如实报告；fill（需用户主动开启）逐张补请求，总请求数不超过请求张数
     #[serde(deserialize_with = "null_default")]
     pub missing_policy: String,
 }
@@ -113,8 +113,10 @@ impl Store {
         if st.request_timeout_sec <= 0 {
             st.request_timeout_sec = 600;
         }
-        if st.missing_policy != MISSING_REPORT {
-            st.missing_policy = MISSING_FILL.into();
+        // 默认（新安装 / 旧配置缺少字段 / 非法值）= report：只发 1 次请求并如实标记 partial；
+        // fill 会产生额外请求（按次计费可能多计费），只能由用户在设置中主动开启
+        if st.missing_policy != MISSING_FILL {
+            st.missing_policy = MISSING_REPORT.into();
         }
         st
     }
@@ -250,11 +252,18 @@ mod tests {
         assert!(s.update_settings(SettingsPatch { output_dir: Some("rel".into()), ..Default::default() }).is_err());
         let st = s.update_settings(SettingsPatch { filename_prefix: Some(" p ".into()), ..Default::default() }).unwrap();
         assert_eq!(st.filename_prefix, "p");
-        assert_eq!(st.missing_policy, MISSING_FILL);
+        assert_eq!(st.missing_policy, MISSING_REPORT, "默认不追加请求");
         assert!(s.update_settings(SettingsPatch { missing_policy: Some("forever".into()), ..Default::default() }).is_err());
-        let st = s.update_settings(SettingsPatch { missing_policy: Some(MISSING_REPORT.into()), ..Default::default() }).unwrap();
-        assert_eq!(st.missing_policy, MISSING_REPORT);
-        assert_eq!(s.settings().missing_policy, MISSING_REPORT);
+        let st = s.update_settings(SettingsPatch { missing_policy: Some(MISSING_FILL.into()), ..Default::default() }).unwrap();
+        assert_eq!(st.missing_policy, MISSING_FILL);
+        let st = s.update_settings(SettingsPatch { filename_prefix: Some("q".into()), ..Default::default() }).unwrap();
+        assert_eq!(st.missing_policy, MISSING_FILL, "其它设置更新不改动用户的明确选择");
+        assert_eq!(s.settings().missing_policy, MISSING_FILL);
+        // 旧配置缺少字段 / 空 / 未知值：一律按 report，不自动迁移为 fill
+        for raw in [r#"{"filenamePrefix":"x"}"#, r#"{"missingPolicy":""}"#, r#"{"missingPolicy":null}"#, r#"{"missingPolicy":"auto"}"#] {
+            fs::write(s.dir.join("settings.json"), raw).unwrap();
+            assert_eq!(s.settings().missing_policy, MISSING_REPORT, "{raw}");
+        }
         let mk = |id: &str, t: i64, i: i64, mode: &str, prompt: &str| Item {
             id: id.into(),
             created_at: t,

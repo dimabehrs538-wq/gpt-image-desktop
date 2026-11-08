@@ -321,7 +321,7 @@ func (e *Engine) Execute(ctx context.Context, jobID string, p *Prepared, progres
 		o.Notes = append(o.Notes, fmt.Sprintf("已逐张补请求 %d 次", o.Requests-1))
 	}
 	if !o.Canceled && o.Err == nil && o.Saved < o.Requested && st.MissingPolicy == store.MissingReport {
-		o.Notes = append(o.Notes, "未自动补图（设置为只报告）")
+		o.Notes = append(o.Notes, "未自动补图（默认只报告，可在设置中开启“张数不足时逐张补图”）")
 	}
 	if o.Canceled {
 		o.Notes = append(o.Notes, fmt.Sprintf("已取消，保留已生成的 %d 张", o.Saved))

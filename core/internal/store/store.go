@@ -16,7 +16,7 @@ type Settings struct {
 	OutputDir         string `json:"outputDir"`
 	RequestTimeoutSec int    `json:"requestTimeoutSec"`
 	FilenamePrefix    string `json:"filenamePrefix"`
-	// MissingPolicy 接口返回张数少于请求时：fill（默认）逐张补请求，最多补到请求张数为止；report 只如实报告不补
+	// MissingPolicy 接口返回张数少于请求时：report（默认）只发 1 次请求并如实报告；fill（需用户主动开启）逐张补请求，总请求数不超过请求张数
 	MissingPolicy string `json:"missingPolicy"`
 }
 
@@ -116,8 +116,10 @@ func (s *Store) settings() Settings {
 	if st.RequestTimeoutSec <= 0 {
 		st.RequestTimeoutSec = 600
 	}
-	if st.MissingPolicy != MissingReport {
-		st.MissingPolicy = MissingFill
+	// 默认（新安装 / 旧配置缺少字段 / 非法值）= report：只发 1 次请求并如实标记 partial；
+	// fill 会产生额外请求（按次计费可能多计费），只能由用户在设置中主动开启
+	if st.MissingPolicy != MissingFill {
+		st.MissingPolicy = MissingReport
 	}
 	return st
 }

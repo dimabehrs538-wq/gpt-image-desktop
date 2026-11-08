@@ -14,7 +14,7 @@ export interface GroupInput {
   keySource: "literal" | "env" | "ref"; apiKey: string; apiKeyEnv: string; apiKeyRef: KeyRef | null; makeDefault: boolean;
 }
 export interface GroupsResp { defaultGroup: string; groups: GroupView[]; configPath?: string }
-/** missingPolicy：接口返回张数少于请求时 fill=逐张补请求（每次 n=1，最多补到请求张数），report=只报告不补 */
+/** missingPolicy：接口返回张数少于请求时 report（默认）=只发 1 次请求并如实报告；fill（用户主动开启）=逐张追加请求（每次 n=1，最多额外 N−1 次，可能产生额外费用） */
 export type MissingPolicy = "fill" | "report";
 export interface Settings { outputDir: string; requestTimeoutSec: number; filenamePrefix: string; missingPolicy: MissingPolicy }
 export interface Status {
