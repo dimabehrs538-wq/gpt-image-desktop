@@ -21,6 +21,7 @@ printf '\033[1;36m内核实现：%s\033[0m\n' "$CORE"
 python3 "$ROOT/scripts/mock-openai.py" --port "$MOCK_PORT" --key "$KEY" > "$TMP/mock.log" 2>&1 & MOCK_PID=$!
 "$BIN" serve --home "$TMP/home" --api-port "$API_PORT" --token "$TOKEN" --output-dir "$TMP/output/imagegen" > "$TMP/core.log" 2>&1 & CORE_PID=$!
 for i in $(seq 50); do curl -sf -o /dev/null -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$API_PORT/api/status" && break; sleep 0.1; done
+for i in $(seq 50); do curl -sf -o /dev/null "http://127.0.0.1:$MOCK_PORT/__stats" && break; sleep 0.1; done  # 等待 Mock 就绪，避免机器繁忙时偶发连接拒绝
 
 A=(-sS -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json")
 U="http://127.0.0.1:$API_PORT"

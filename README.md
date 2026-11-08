@@ -357,8 +357,8 @@ npx tauri ios build --target aarch64 --no-sign       # 仅打包未签名归档
 ```bash
 # 同步修改版本号：app/package.json（及 package-lock.json）、app/src-tauri/tauri.conf.json、app/src-tauri/Cargo.toml、
 # app/src-tauri/mobile-core/Cargo.toml（及 Cargo.lock）、core/internal/server/server.go 的 Version、mobile-core/src/server.rs 的 VERSION
-git commit -am "release: v0.1.2"
-git tag -a v0.1.2 -m "更新说明……"   # 标签说明会写入 latest.json 的 notes
+git commit -am "release: v0.1.3"
+git tag -a v0.1.3 -m "更新说明……"   # 标签说明会写入 latest.json 的 notes
 git push origin main --tags
 ```
 
